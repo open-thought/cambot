@@ -1,0 +1,10 @@
+Baseplate: 0,0,0
+Link1: 0, 0, 38.20 mm
+Link2: 22.20 mm, 0.00 mm, 83.70 mm
+Link3: -177.80 mm, 0.00 mm, 83.70 m
+Link4: -7.80 mm, 0.00 mm, 118.70 mm
+Link5: 53.00 mm, 0.00 mm, 118.70 mm
+Zed_Mini: 58.00 mm, 0.00 mm, 177.20 mm
+ right_eye: 114.507 mm, -31.50 mm, 177.188 mm
+ left_eye: 114.507 mm, 31.50 mm, 177.188 mm
+

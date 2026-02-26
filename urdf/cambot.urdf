@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="StereoBot">
+
+  <!-- ==================== Materials ==================== -->
+  <material name="dark_grey">
+    <color rgba="0.3 0.3 0.3 1.0"/>
+  </material>
+  <material name="light_grey">
+    <color rgba="0.6 0.6 0.6 1.0"/>
+  </material>
+  <material name="black">
+    <color rgba="0.1 0.1 0.1 1.0"/>
+  </material>
+
+  <!-- ==================== Links ==================== -->
+
+  <!-- Baseplate: world origin (0, 0, 0) -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/Baseplate.stl"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+  </link>
+
+  <!-- Link1: world pos (0, 0, 0.03820) -->
+  <link name="link1">
+    <visual>
+      <origin xyz="0 0 -0.03820" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/Link1.stl"/>
+      </geometry>
+      <material name="light_grey"/>
+    </visual>
+  </link>
+
+  <!-- Link2: world pos (0.02220, 0, 0.08370) -->
+  <link name="link2">
+    <visual>
+      <origin xyz="-0.02220 0 -0.08370" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/Link2.stl"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+  </link>
+
+  <!-- Link3: world pos (-0.17780, 0, 0.08370) -->
+  <link name="link3">
+    <visual>
+      <origin xyz="0.17780 0 -0.08370" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/Link3.stl"/>
+      </geometry>
+      <material name="light_grey"/>
+    </visual>
+  </link>
+
+  <!-- Link4: world pos (-0.00780, 0, 0.11870) -->
+  <link name="link4">
+    <visual>
+      <origin xyz="0.00780 0 -0.11870" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/Link4.stl"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+  </link>
+
+  <!-- Link5: world pos (0.05300, 0, 0.11870) -->
+  <link name="link5">
+    <visual>
+      <origin xyz="-0.05300 0 -0.11870" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/Link5.stl"/>
+      </geometry>
+      <material name="light_grey"/>
+    </visual>
+  </link>
+
+  <!-- ZED Mini mount: world pos (0.05800, 0, 0.17720) -->
+  <link name="zed_mini_mount">
+    <visual>
+      <origin xyz="-0.05800 0 -0.17720" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/ZedMiniMount.stl"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+  </link>
+
+  <!-- Camera links (no visual geometry, just reference frames) -->
+  <link name="right_camera_link"/>
+  <link name="left_camera_link"/>
+  <link name="right_camera_optical_frame"/>
+  <link name="left_camera_optical_frame"/>
+
+  <!-- ==================== Joints ==================== -->
+
+  <!-- Joint 1: base_link -> link1, vertical rotation (Z axis) -->
+  <!-- Relative: (0, 0, 0.03820) - (0, 0, 0) = (0, 0, 0.03820) -->
+  <joint name="base_yaw" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.03820" rpy="0 0 0"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="-1.2747" upper="1.3346" effort="1.5" velocity="3.0"/>
+  </joint>
+
+  <!-- Joint 2: link1 -> link2, horizontal rotation (Y axis) -->
+  <!-- Relative: (0.02220, 0, 0.08370) - (0, 0, 0.03820) = (0.02220, 0, 0.04550) -->
+  <joint name="shoulder_pitch" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0.02220 0 0.04550" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="-3.4392" upper="0.0936" effort="1.5" velocity="3.0"/>
+  </joint>
+
+  <!-- Joint 3: link2 -> link3, horizontal rotation (Y axis) -->
+  <!-- Relative: (-0.17780, 0, 0.08370) - (0.02220, 0, 0.08370) = (-0.20000, 0, 0) -->
+  <joint name="elbow_pitch" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="-0.20000 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-4.2599" upper="0.0353" effort="1.5" velocity="3.0"/>
+  </joint>
+
+  <!-- Joint 4: link3 -> link4, horizontal rotation (Y axis) -->
+  <!-- Relative: (-0.00780, 0, 0.11870) - (-0.17780, 0, 0.08370) = (0.17000, 0, 0.03500) -->
+  <joint name="wrist_pitch" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0.17000 0 0.03500" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.9666" upper="1.6782" effort="1.5" velocity="3.0"/>
+  </joint>
+
+  <!-- Joint 5: link4 -> link5, vertical rotation (Z axis) -->
+  <!-- Relative: (0.05300, 0, 0.11870) - (-0.00780, 0, 0.11870) = (0.06080, 0, 0) -->
+  <joint name="wrist_yaw" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0.06080 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="-1.8699" upper="1.8438" effort="1.5" velocity="3.0"/>
+  </joint>
+
+  <!-- Joint 6: link5 -> zed_mini_mount, rotation around X axis -->
+  <!-- Relative: (0.05800, 0, 0.17720) - (0.05300, 0, 0.11870) = (0.00500, 0, 0.05850) -->
+  <joint name="camera_roll" type="revolute">
+    <parent link="link5"/>
+    <child link="zed_mini_mount"/>
+    <origin xyz="0.00500 0 0.05850" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-3.2030" upper="3.1339" effort="1.5" velocity="3.0"/>
+  </joint>
+
+  <!-- ==================== Camera Joints (fixed) ==================== -->
+
+  <!-- Right camera: world (0.114507, -0.03150, 0.177188) relative to zed_mount (0.05800, 0, 0.17720) -->
+  <joint name="right_camera_joint" type="fixed">
+    <parent link="zed_mini_mount"/>
+    <child link="right_camera_link"/>
+    <origin xyz="0.056507 -0.03150 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Left camera: world (0.114507, 0.03150, 0.177188) relative to zed_mount (0.05800, 0, 0.17720) -->
+  <joint name="left_camera_joint" type="fixed">
+    <parent link="zed_mini_mount"/>
+    <child link="left_camera_link"/>
+    <origin xyz="0.056507 0.03150 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Optical frames: rotated so +Z = forward (optical axis), +X = right, +Y = down -->
+  <joint name="right_camera_optical_joint" type="fixed">
+    <parent link="right_camera_link"/>
+    <child link="right_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+  </joint>
+
+  <joint name="left_camera_optical_joint" type="fixed">
+    <parent link="left_camera_link"/>
+    <child link="left_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+  </joint>
+
+</robot>

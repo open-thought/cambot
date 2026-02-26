@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""Interactive test program for a 6-DOF Feetech STS3215 servo arm.
+
+Controls:
+  1-6        Select motor
+  Left/Right Move selected motor by step size
+  +/-        Increase/decrease step size
+  t          Toggle torque on selected motor
+  T          Toggle torque on ALL motors
+  h          Move selected motor to center (2048)
+  r          Read and refresh all positions
+  q / ESC    Quit
+"""
+
+import curses
+import sys
+
+import scservo_sdk as scs
+
+# --- Configuration ---
+PORT = "/dev/ttyACM0"
+BAUDRATE = 1_000_000
+PROTOCOL_VERSION = 0  # STS3215 uses protocol 0
+
+MOTOR_NAMES = {
+    1: "shoulder_pan",
+    2: "shoulder_lift",
+    3: "elbow_flex",
+    4: "wrist_flex",
+    5: "wrist_roll",
+    6: "gripper",
+}
+MOTOR_IDS = list(MOTOR_NAMES.keys())
+
+# Register addresses (STS3215)
+ADDR_TORQUE_ENABLE = 40
+ADDR_ACCELERATION = 41       # 1 byte, SRAM
+ADDR_GOAL_POSITION = 42
+ADDR_TORQUE_LIMIT = 48       # 2 bytes, SRAM (0-1000 = 0-100%)
+ADDR_PRESENT_POSITION = 56   # 2 bytes, sign-magnitude bit 15
+ADDR_PRESENT_LOAD = 60       # 2 bytes, sign-magnitude bit 10
+ADDR_PRESENT_VOLTAGE = 62    # 1 byte, x0.1V
+ADDR_PRESENT_TEMPERATURE = 63  # 1 byte, Celsius
+ADDR_PRESENT_CURRENT = 69    # 2 bytes, mA
+
+# Position range: 0-4095 (12-bit), center ~2048
+POS_MIN = 0
+POS_MAX = 4095
+DEFAULT_STEP = 20
+
+
+def decode_sign_magnitude(raw, sign_bit):
+    direction = (raw >> sign_bit) & 1
+    magnitude = raw & ((1 << sign_bit) - 1)
+    return -magnitude if direction else magnitude
+
+
+def connect(port, baudrate):
+    port_handler = scs.PortHandler(port)
+    packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
+    if not port_handler.openPort():
+        print(f"Failed to open port {port}")
+        sys.exit(1)
+    if not port_handler.setBaudRate(baudrate):
+        print(f"Failed to set baud rate {baudrate}")
+        sys.exit(1)
+    return port_handler, packet_handler
+
+
+def init_sram(packet_handler, port_handler):
+    """Set SRAM registers that reset on power-up."""
+    for mid in MOTOR_IDS:
+        # Acceleration (SRAM addr 41) — 254 for snappy response (resets to 0 on power cycle)
+        packet_handler.write1ByteTxRx(port_handler, mid, ADDR_ACCELERATION, 254)
+        # Torque limit (SRAM addr 48) — 1000 = 100% (resets on power cycle)
+        packet_handler.write2ByteTxRx(port_handler, mid, ADDR_TORQUE_LIMIT, 1000)
+
+
+def read_position(packet_handler, port_handler, motor_id):
+    pos, result, error = packet_handler.read2ByteTxRx(port_handler, motor_id, ADDR_PRESENT_POSITION)
+    if result != scs.COMM_SUCCESS:
+        return None
+    return pos
+
+
+def read_load(packet_handler, port_handler, motor_id):
+    raw, result, error = packet_handler.read2ByteTxRx(port_handler, motor_id, ADDR_PRESENT_LOAD)
+    if result != scs.COMM_SUCCESS:
+        return None
+    return decode_sign_magnitude(raw, 10)
+
+
+def read_voltage(packet_handler, port_handler, motor_id):
+    val, result, error = packet_handler.read1ByteTxRx(port_handler, motor_id, ADDR_PRESENT_VOLTAGE)
+    if result != scs.COMM_SUCCESS:
+        return None
+    return val * 0.1
+
+
+def read_temperature(packet_handler, port_handler, motor_id):
+    val, result, error = packet_handler.read1ByteTxRx(port_handler, motor_id, ADDR_PRESENT_TEMPERATURE)
+    if result != scs.COMM_SUCCESS:
+        return None
+    return val
+
+
+def read_current(packet_handler, port_handler, motor_id):
+    val, result, error = packet_handler.read2ByteTxRx(port_handler, motor_id, ADDR_PRESENT_CURRENT)
+    if result != scs.COMM_SUCCESS:
+        return None
+    return val
+
+
+def write_position(packet_handler, port_handler, motor_id, position):
+    position = max(POS_MIN, min(POS_MAX, position))
+    result, error = packet_handler.write2ByteTxRx(port_handler, motor_id, ADDR_GOAL_POSITION, position)
+    return result == scs.COMM_SUCCESS
+
+
+def set_torque(packet_handler, port_handler, motor_id, enable):
+    result, error = packet_handler.write1ByteTxRx(
+        port_handler, motor_id, ADDR_TORQUE_ENABLE, 1 if enable else 0
+    )
+    return result == scs.COMM_SUCCESS
+
+
+def read_torque(packet_handler, port_handler, motor_id):
+    val, result, error = packet_handler.read1ByteTxRx(port_handler, motor_id, ADDR_TORQUE_ENABLE)
+    if result != scs.COMM_SUCCESS:
+        return None
+    return bool(val)
+
+
+def main(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(False)
+    stdscr.timeout(100)  # 100ms refresh
+    curses.start_color()
+    curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
+    curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+    curses.init_pair(3, curses.COLOR_CYAN, curses.COLOR_BLACK)
+    curses.init_pair(4, curses.COLOR_RED, curses.COLOR_BLACK)
+
+    port_handler, packet_handler = connect(PORT, BAUDRATE)
+    init_sram(packet_handler, port_handler)
+
+    selected = 0  # index into MOTOR_IDS
+    step = DEFAULT_STEP
+    positions = {mid: None for mid in MOTOR_IDS}   # actual read-back position
+    goals = {mid: None for mid in MOTOR_IDS}        # commanded goal position
+    torque_state = {mid: None for mid in MOTOR_IDS}
+    loads = {mid: None for mid in MOTOR_IDS}
+    voltages = {mid: None for mid in MOTOR_IDS}
+    temperatures = {mid: None for mid in MOTOR_IDS}
+    currents = {mid: None for mid in MOTOR_IDS}
+    status_msg = ""
+
+    # Initial read
+    for mid in MOTOR_IDS:
+        positions[mid] = read_position(packet_handler, port_handler, mid)
+        goals[mid] = positions[mid]
+        torque_state[mid] = read_torque(packet_handler, port_handler, mid)
+
+    try:
+        while True:
+            stdscr.erase()
+            h, w = stdscr.getmaxyx()
+
+            # Title
+            title = "=== 6-DOF Feetech Servo Test ==="
+            stdscr.addstr(0, max(0, (w - len(title)) // 2), title, curses.A_BOLD | curses.color_pair(3))
+
+            # Motor table header
+            hdr = f"{'#':<4}{'Name':<16}{'Pos':>6}{'Torq':>6}{'Load':>6}{'mA':>6}{'V':>6}{'C':>5}"
+            stdscr.addstr(2, 2, hdr, curses.A_BOLD)
+            stdscr.addstr(3, 2, "-" * len(hdr))
+
+            # Motor rows
+            for i, mid in enumerate(MOTOR_IDS):
+                pos = positions[mid]
+                torque = torque_state[mid]
+                load = loads[mid]
+                voltage = voltages[mid]
+                temp = temperatures[mid]
+                current = currents[mid]
+
+                pos_str = str(pos) if pos is not None else "ERR"
+                torque_str = "ON" if torque else "OFF" if torque is not None else "?"
+                load_str = f"{load:+d}" if load is not None else "?"
+                current_str = str(current) if current is not None else "?"
+                volt_str = f"{voltage:.1f}" if voltage is not None else "?"
+                temp_str = str(temp) if temp is not None else "?"
+
+                attr = curses.A_BOLD | curses.color_pair(1) if i == selected else 0
+                marker = ">" if i == selected else " "
+
+                row = f"{marker}{mid:<3}{MOTOR_NAMES[mid]:<16}{pos_str:>6}{torque_str:>6}{load_str:>6}{current_str:>6}{volt_str:>6}{temp_str:>5}"
+                stdscr.addstr(4 + i, 2, row, attr)
+
+            # Voltage warning
+            any_voltage = next((v for v in voltages.values() if v is not None), None)
+            info_y = 4 + len(MOTOR_IDS) + 1
+            if any_voltage is not None and any_voltage < 6.0:
+                warn = f"WARNING: Voltage {any_voltage:.1f}V is below 6.0V! Servos need 6-7.4V for full torque."
+                stdscr.addstr(info_y, 2, warn, curses.A_BOLD | curses.color_pair(4))
+                info_y += 1
+
+            # Info
+            stdscr.addstr(info_y, 2, f"Selected: motor {MOTOR_IDS[selected]} ({MOTOR_NAMES[MOTOR_IDS[selected]]})", curses.color_pair(2))
+            stdscr.addstr(info_y + 1, 2, f"Step size: {step}", curses.color_pair(2))
+
+            # Controls
+            ctrl_y = info_y + 3
+            stdscr.addstr(ctrl_y, 2, "Controls:", curses.A_BOLD | curses.color_pair(3))
+            controls = [
+                "1-6: Select motor    Left/Right: Move    +/-: Step size",
+                "t: Toggle torque     T: All torque       h: Go to center",
+                "r: Refresh           q/ESC: Quit",
+            ]
+            for j, line in enumerate(controls):
+                stdscr.addstr(ctrl_y + 1 + j, 4, line)
+
+            # Status
+            if status_msg:
+                stdscr.addstr(ctrl_y + 5, 2, status_msg, curses.color_pair(4))
+
+            stdscr.refresh()
+
+            # Read all telemetry continuously
+            for mid in MOTOR_IDS:
+                p = read_position(packet_handler, port_handler, mid)
+                if p is not None:
+                    positions[mid] = p
+                loads[mid] = read_load(packet_handler, port_handler, mid)
+                currents[mid] = read_current(packet_handler, port_handler, mid)
+            # Voltage/temp less often (only selected motor to save bus time)
+            sel_mid = MOTOR_IDS[selected]
+            voltages[sel_mid] = read_voltage(packet_handler, port_handler, sel_mid)
+            temperatures[sel_mid] = read_temperature(packet_handler, port_handler, sel_mid)
+
+            # Handle input
+            key = stdscr.getch()
+            if key == -1:
+                continue
+
+            status_msg = ""
+            mid = MOTOR_IDS[selected]
+
+            if key in (ord('q'), ord('Q'), 27):  # q or ESC
+                break
+            elif ord('1') <= key <= ord('6'):
+                selected = key - ord('1')
+            elif key == curses.KEY_UP:
+                selected = (selected - 1) % len(MOTOR_IDS)
+            elif key == curses.KEY_DOWN:
+                selected = (selected + 1) % len(MOTOR_IDS)
+            elif key == curses.KEY_RIGHT:
+                goal = goals[mid] if goals[mid] is not None else positions[mid]
+                if goal is not None:
+                    new_pos = min(POS_MAX, goal + step)
+                    if write_position(packet_handler, port_handler, mid, new_pos):
+                        goals[mid] = new_pos
+                        status_msg = f"Motor {mid} -> {new_pos}"
+                    else:
+                        status_msg = f"Failed to write motor {mid}"
+            elif key == curses.KEY_LEFT:
+                goal = goals[mid] if goals[mid] is not None else positions[mid]
+                if goal is not None:
+                    new_pos = max(POS_MIN, goal - step)
+                    if write_position(packet_handler, port_handler, mid, new_pos):
+                        goals[mid] = new_pos
+                        status_msg = f"Motor {mid} -> {new_pos}"
+                    else:
+                        status_msg = f"Failed to write motor {mid}"
+            elif key in (ord('+'), ord('=')):
+                step = min(200, step + 5)
+            elif key in (ord('-'), ord('_')):
+                step = max(1, step - 5)
+            elif key == ord('t'):
+                cur = torque_state[mid]
+                new_val = not cur if cur is not None else True
+                if set_torque(packet_handler, port_handler, mid, new_val):
+                    torque_state[mid] = new_val
+                    status_msg = f"Motor {mid} torque {'ON' if new_val else 'OFF'}"
+                else:
+                    status_msg = f"Failed to set torque on motor {mid}"
+            elif key == ord('T'):
+                # Toggle all - if any are on, turn all off; otherwise turn all on
+                any_on = any(v for v in torque_state.values() if v)
+                new_val = not any_on
+                for m in MOTOR_IDS:
+                    set_torque(packet_handler, port_handler, m, new_val)
+                    torque_state[m] = new_val
+                status_msg = f"All torque {'ON' if new_val else 'OFF'}"
+            elif key == ord('h'):
+                center = 2048
+                if write_position(packet_handler, port_handler, mid, center):
+                    goals[mid] = center
+                    status_msg = f"Motor {mid} -> center (2048)"
+            elif key == ord('r'):
+                for m in MOTOR_IDS:
+                    positions[m] = read_position(packet_handler, port_handler, m)
+                    torque_state[m] = read_torque(packet_handler, port_handler, m)
+                    voltages[m] = read_voltage(packet_handler, port_handler, m)
+                    temperatures[m] = read_temperature(packet_handler, port_handler, m)
+                status_msg = "Refreshed all"
+
+    finally:
+        # Disable torque on exit
+        for mid in MOTOR_IDS:
+            set_torque(packet_handler, port_handler, mid, False)
+        port_handler.closePort()
+
+
+if __name__ == "__main__":
+    curses.wrapper(main)
