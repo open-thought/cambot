@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Joint limit calibration for the CamBot (passive / read-only).
+"""Joint limit calibration for the StereoBot (passive / read-only).
 
 The script never drives the motors. You move everything by hand.
 
@@ -80,7 +80,7 @@ def stdin_ready():
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="CamBot joint limit calibration")
+    parser = argparse.ArgumentParser(description="StereoBot joint limit calibration")
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument("--baudrate", type=int, default=DEFAULT_BAUDRATE)
     args = parser.parse_args()
