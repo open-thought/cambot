@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# SSL certificates
+*.pem
+
+# Local data
+calibration/
+output.txt
+waypoints.json

@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StereoBot - Quest 3 Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; color: #fff; overflow: hidden; font-family: sans-serif; }
+        canvas { position: absolute; top: 0; left: 0; z-index: 0; }
+        #overlay {
+            position: absolute; top: 10px; left: 10px; z-index: 100;
+            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px;
+            font-size: 13px; font-family: monospace; pointer-events: none;
+        }
+        #overlay div { margin: 4px 0; }
+        #controls {
+            position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+            z-index: 100; display: flex; gap: 12px; align-items: center;
+            background: rgba(0,0,0,0.7); padding: 14px 20px; border-radius: 12px;
+        }
+        button {
+            padding: 12px 24px; font-size: 16px; border: none; border-radius: 8px;
+            cursor: pointer; background: #1a73e8; color: white; font-weight: 500;
+        }
+        button:hover { background: #1557b0; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        #status {
+            padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500;
+        }
+        #status.connecting { background: #ffa726; color: #000; }
+        #status.connected { background: #4caf50; }
+        #status.disconnected { background: #f44336; }
+
+        /* Settings panel */
+        #settingsBtn { background: #444; }
+        #settingsBtn:hover { background: #666; }
+        #settings {
+            position: absolute; top: 10px; right: 10px; z-index: 100;
+            background: rgba(0,0,0,0.9); padding: 16px; border-radius: 10px;
+            font-size: 14px; width: 280px; display: none;
+            max-height: calc(100vh - 120px); overflow-y: auto;
+        }
+        #settings.open { display: block; }
+        #settings h3 { margin: 0 0 12px; font-size: 15px; color: #aaa; }
+        .setting { margin-bottom: 14px; }
+        .setting label {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 4px; font-size: 13px; color: #ccc;
+        }
+        .setting label span { color: #1a9fff; font-family: monospace; }
+        .setting input[type="range"] {
+            width: 100%; accent-color: #1a73e8; cursor: pointer;
+        }
+        .setting-group { border-top: 1px solid #333; padding-top: 12px; margin-top: 12px; }
+        .setting-group-title { font-size: 12px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+        #resetBtn { background: #c62828; padding: 8px 16px; font-size: 13px; width: 100%; margin-top: 4px; }
+        #resetBtn:hover { background: #e53935; }
+    </style>
+</head>
+<body>
+    <div id="overlay">
+        <div>FPS: <span id="fps">0</span></div>
+        <div>Resolution: <span id="resolution">-</span></div>
+        <div>Frame size: <span id="framesize">-</span></div>
+        <div>Debug: <span id="debug">init</span></div>
+    </div>
+
+    <div id="settings">
+        <h3>Settings</h3>
+
+        <div class="setting-group-title">Screen</div>
+        <div class="setting">
+            <label>Distance <span id="distVal">3.5</span>m</label>
+            <input type="range" id="distSlider" min="0.3" max="5.0" step="0.1" value="3.5">
+        </div>
+        <div class="setting">
+            <label>Size <span id="sizeVal">6.0</span></label>
+            <input type="range" id="sizeSlider" min="0.5" max="8.0" step="0.1" value="6.0">
+        </div>
+
+        <div class="setting-group">
+            <div class="setting-group-title">Stereo</div>
+            <div class="setting">
+                <label>Convergence <span id="convVal">0</span>px</label>
+                <input type="range" id="convSlider" min="-100" max="100" step="1" value="0">
+            </div>
+            <div class="setting">
+                <label>V-Align <span id="valignVal">0</span>px</label>
+                <input type="range" id="valignSlider" min="-50" max="50" step="1" value="0">
+            </div>
+            <div class="setting" style="display:flex; align-items:center; gap:10px;">
+                <label style="margin:0; flex:1;">Swap Eyes</label>
+                <button id="swapBtn" style="padding:8px 16px; font-size:13px; background:#444;">Off</button>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div class="setting-group-title">Image</div>
+            <div class="setting">
+                <label>Sharpen <span id="sharpVal">1.3</span></label>
+                <input type="range" id="sharpSlider" min="0" max="2.0" step="0.1" value="1.3">
+            </div>
+            <div class="setting">
+                <label>Brightness <span id="brightVal">10</span></label>
+                <input type="range" id="brightSlider" min="-50" max="50" step="1" value="10">
+            </div>
+            <div class="setting">
+                <label>Contrast <span id="contrastVal">0</span></label>
+                <input type="range" id="contrastSlider" min="-50" max="50" step="1" value="0">
+            </div>
+        </div>
+
+        <button id="resetBtn">Reset Defaults</button>
+    </div>
+
+    <div id="controls">
+        <button id="startBtn">Start Stream</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="settingsBtn">Settings</button>
+        <span id="status" class="disconnected">Disconnected</span>
+    </div>
+
+    <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js';
+    import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/webxr/VRButton.js';
+
+    console.log('Three.js loaded:', THREE.REVISION);
+
+    // --- Elements ---
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settings');
+    const statusEl = document.getElementById('status');
+    const fpsEl = document.getElementById('fps');
+    const resEl = document.getElementById('resolution');
+    const fsEl = document.getElementById('framesize');
+    const debugEl = document.getElementById('debug');
+
+    let ws = null;
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+
+    // --- Settings ---
+    const DEFAULTS = { dist: 3.5, size: 6.0, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
+    const settings = { ...DEFAULTS };
+    let syncEnabled = true;
+
+    const distSlider = document.getElementById('distSlider');
+    const sizeSlider = document.getElementById('sizeSlider');
+    const convSlider = document.getElementById('convSlider');
+    const valignSlider = document.getElementById('valignSlider');
+    const swapBtn = document.getElementById('swapBtn');
+    const sharpSlider = document.getElementById('sharpSlider');
+    const brightSlider = document.getElementById('brightSlider');
+    const contrastSlider = document.getElementById('contrastSlider');
+    const distVal = document.getElementById('distVal');
+    const sizeVal = document.getElementById('sizeVal');
+    const convVal = document.getElementById('convVal');
+    const valignVal = document.getElementById('valignVal');
+    const sharpVal = document.getElementById('sharpVal');
+    const brightVal = document.getElementById('brightVal');
+    const contrastVal = document.getElementById('contrastVal');
+
+    function syncUI() {
+        distSlider.value = settings.dist;
+        sizeSlider.value = settings.size;
+        convSlider.value = settings.conv;
+        valignSlider.value = settings.valign;
+        sharpSlider.value = settings.sharp;
+        brightSlider.value = settings.bright;
+        contrastSlider.value = settings.contrast;
+        distVal.textContent = settings.dist.toFixed(1);
+        sizeVal.textContent = settings.size.toFixed(1);
+        convVal.textContent = settings.conv;
+        valignVal.textContent = settings.valign;
+        sharpVal.textContent = settings.sharp.toFixed(1);
+        brightVal.textContent = settings.bright;
+        contrastVal.textContent = settings.contrast;
+        swapBtn.textContent = settings.swap ? 'On' : 'Off';
+        swapBtn.style.background = settings.swap ? '#1a73e8' : '#444';
+    }
+    syncUI();
+
+    settingsBtn.addEventListener('click', () => settingsPanel.classList.toggle('open'));
+
+    distSlider.addEventListener('input', (e) => {
+        settings.dist = parseFloat(e.target.value);
+        distVal.textContent = settings.dist.toFixed(1);
+        applySettings();
+    });
+    sizeSlider.addEventListener('input', (e) => {
+        settings.size = parseFloat(e.target.value);
+        sizeVal.textContent = settings.size.toFixed(1);
+        applySettings();
+    });
+    convSlider.addEventListener('input', (e) => {
+        settings.conv = parseInt(e.target.value);
+        convVal.textContent = settings.conv;
+        applySettings();
+    });
+    valignSlider.addEventListener('input', (e) => {
+        settings.valign = parseInt(e.target.value);
+        valignVal.textContent = settings.valign;
+        applySettings();
+    });
+    swapBtn.addEventListener('click', () => {
+        settings.swap = !settings.swap;
+        swapBtn.textContent = settings.swap ? 'On' : 'Off';
+        swapBtn.style.background = settings.swap ? '#1a73e8' : '#444';
+        applySettings();
+    });
+    sharpSlider.addEventListener('input', (e) => {
+        settings.sharp = parseFloat(e.target.value);
+        sharpVal.textContent = settings.sharp.toFixed(1);
+        applySettings();
+    });
+    brightSlider.addEventListener('input', (e) => {
+        settings.bright = parseInt(e.target.value);
+        brightVal.textContent = settings.bright;
+        applySettings();
+    });
+    contrastSlider.addEventListener('input', (e) => {
+        settings.contrast = parseInt(e.target.value);
+        contrastVal.textContent = settings.contrast;
+        applySettings();
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+        Object.assign(settings, DEFAULTS);
+        syncUI();
+        applySettings();
+    });
+
+    function handleServerMessage(data) {
+        if (data.type === 'settings_sync') {
+            syncEnabled = false;
+            Object.assign(settings, data.settings);
+            syncUI();
+            applySettings();
+            syncEnabled = true;
+        }
+    }
+
+    // --- Offscreen canvas for frame decoding ---
+    const drawCanvas = document.createElement('canvas');
+    const drawCtx = drawCanvas.getContext('2d', { willReadFrequently: false });
+
+    // Init with test pattern
+    drawCanvas.width = 2560;
+    drawCanvas.height = 720;
+    drawCtx.fillStyle = '#00cccc';
+    drawCtx.fillRect(0, 0, 1280, 720);
+    drawCtx.fillStyle = '#cc00cc';
+    drawCtx.fillRect(1280, 0, 1280, 720);
+    drawCtx.fillStyle = '#fff';
+    drawCtx.font = '60px sans-serif';
+    drawCtx.textAlign = 'center';
+    drawCtx.fillText('LEFT EYE', 640, 360);
+    drawCtx.fillText('RIGHT EYE', 1920, 360);
+    drawCtx.font = '30px sans-serif';
+    drawCtx.fillText('Start stream to see camera', 640, 440);
+    drawCtx.fillText('Start stream to see camera', 1920, 440);
+
+    let decoding = false;
+    let latestFrameData = null;
+
+    // --- Three.js Setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.layers.enable(1);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local');
+    document.body.appendChild(renderer.domElement);
+
+    try {
+        document.body.appendChild(VRButton.createButton(renderer));
+        console.log('VR button created');
+    } catch (e) {
+        console.warn('VR button unavailable:', e.message);
+    }
+
+    // --- Texture ---
+    const texture = new THREE.CanvasTexture(drawCanvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
+    texture.needsUpdate = true;
+
+    // --- Stereo quads with GPU shader ---
+    let SBS_WIDTH = 2560;
+    const EYE_ASPECT = 1280 / 720;
+
+    const uniforms = {
+        map: { value: texture },
+        texSize: { value: new THREE.Vector2(SBS_WIDTH, 720) },
+        uSharpen: { value: 0.0 },
+        uBrightness: { value: 0.0 },
+        uContrast: { value: 0.0 },
+    };
+
+    const vertexShader = `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `;
+
+    const fragmentShader = `
+        precision highp float;
+        uniform sampler2D map;
+        uniform vec2 texSize;
+        uniform float uSharpen;
+        uniform float uBrightness;
+        uniform float uContrast;
+        varying vec2 vUv;
+
+        vec3 sampleTex(vec2 offset) {
+            return texture2D(map, vUv + offset / texSize).rgb;
+        }
+
+        void main() {
+            vec3 center = texture2D(map, vUv).rgb;
+            vec3 color = center;
+
+            if (uSharpen > 0.0) {
+                vec3 blur = (
+                    sampleTex(vec2(-1.0, 0.0)) +
+                    sampleTex(vec2( 1.0, 0.0)) +
+                    sampleTex(vec2( 0.0,-1.0)) +
+                    sampleTex(vec2( 0.0, 1.0))
+                ) * 0.25;
+                color = color + (color - blur) * uSharpen;
+            }
+
+            color += uBrightness;
+            color = (color - 0.5) * uContrast + 0.5;
+            color = clamp(color, 0.0, 1.0);
+            gl_FragColor = vec4(color, 1.0);
+        }
+    `;
+
+    const material = new THREE.ShaderMaterial({
+        uniforms, vertexShader, fragmentShader,
+        depthTest: false, depthWrite: false,
+    });
+
+    function makePlane() {
+        const geo = new THREE.PlaneGeometry(1, 1);
+        const mesh = new THREE.Mesh(geo, material);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 1;
+        return mesh;
+    }
+
+    const leftMesh = makePlane();
+    leftMesh.layers.enable(0);
+    leftMesh.layers.enable(1);
+    scene.add(leftMesh);
+
+    const rightMesh = makePlane();
+    rightMesh.layers.set(2);
+    scene.add(rightMesh);
+
+    const BASE_UVS = [0,1, 1,1, 0,0, 1,0];
+    function setUVs(mesh, uBase, convPx, vPx) {
+        const uvs = mesh.geometry.attributes.uv.array;
+        const hShift = convPx / (SBS_WIDTH / 2);
+        const vShift = vPx / (SBS_WIDTH / 2 / EYE_ASPECT);
+        for (let i = 0; i < uvs.length; i += 2) {
+            uvs[i]     = uBase + BASE_UVS[i] * 0.5 + hShift;
+            uvs[i + 1] = BASE_UVS[i + 1] + vShift;
+        }
+        mesh.geometry.attributes.uv.needsUpdate = true;
+    }
+
+    function applySettings() {
+        const w = settings.size;
+        const h = w / EYE_ASPECT;
+
+        leftMesh.scale.set(w, h, 1);
+        rightMesh.scale.set(w, h, 1);
+
+        const convPx = settings.conv;
+        const leftBase = settings.swap ? 0.5 : 0;
+        const rightBase = settings.swap ? 0 : 0.5;
+        const vPx = settings.valign;
+
+        setUVs(leftMesh, leftBase, convPx, 0);
+        setUVs(rightMesh, rightBase, -convPx, vPx);
+
+        leftMesh.userData.offset = new THREE.Vector3(0, -0.35, -settings.dist);
+        rightMesh.userData.offset = new THREE.Vector3(0, -0.35, -settings.dist);
+
+        uniforms.uSharpen.value = settings.sharp;
+        uniforms.uBrightness.value = settings.bright / 100;
+        uniforms.uContrast.value = 1.0 + settings.contrast / 50;
+
+        if (syncEnabled && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'settings_sync', settings }));
+        }
+    }
+    applySettings();
+
+    const _lockPos = new THREE.Vector3();
+    const _lockQuat = new THREE.Quaternion();
+    function lockToHead(mesh, cam) {
+        cam.getWorldPosition(_lockPos);
+        cam.getWorldQuaternion(_lockQuat);
+        const off = mesh.userData.offset;
+        const pos = off.clone().applyQuaternion(_lockQuat).add(_lockPos);
+        mesh.position.copy(pos);
+        mesh.quaternion.copy(_lockQuat);
+    }
+
+    // --- Head Pose Sending (quaternion + position) ---
+    let lastPoseSendTime = 0;
+    const POSE_SEND_INTERVAL = 8; // ~120Hz, control loop picks latest
+    const _worldPos = new THREE.Vector3();
+    const _worldQuat = new THREE.Quaternion();
+
+    function sendHeadPose(cam) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const now = performance.now();
+        if (now - lastPoseSendTime < POSE_SEND_INTERVAL) return;
+        lastPoseSendTime = now;
+
+        // Must use getWorld* - XR camera's matrixWorld is set directly
+        // from the XR frame, but .position/.quaternion may be stale.
+        cam.getWorldPosition(_worldPos);
+        cam.getWorldQuaternion(_worldQuat);
+        ws.send(JSON.stringify({
+            type: "head_pose",
+            q: { x: _worldQuat.x, y: _worldQuat.y, z: _worldQuat.z, w: _worldQuat.w },
+            p: { x: _worldPos.x, y: _worldPos.y, z: _worldPos.z },
+            t: performance.now()
+        }));
+    }
+
+    // --- Render Loop ---
+    let textureReady = false;
+    let renderCount = 0;
+
+    renderer.setAnimationLoop(() => {
+        if (textureReady) {
+            texture.needsUpdate = true;
+            textureReady = false;
+        }
+
+        const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+
+        lockToHead(leftMesh, xrCam);
+        lockToHead(rightMesh, xrCam);
+
+        if (renderer.xr.isPresenting) {
+            sendHeadPose(xrCam);
+        }
+
+        renderer.render(scene, camera);
+
+        renderCount++;
+        if (renderCount % 300 === 0) {
+            debugEl.textContent = `renders=${renderCount} xr=${renderer.xr.isPresenting}`;
+        }
+    });
+
+    camera.position.set(0, 0, 0);
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- Frame decode ---
+    function processLatestFrame() {
+        if (decoding || !latestFrameData) return;
+        decoding = true;
+        const data = latestFrameData;
+        latestFrameData = null;
+
+        const blob = new Blob([data], { type: 'image/jpeg' });
+        createImageBitmap(blob).then((bmp) => {
+            if (drawCanvas.width !== bmp.width || drawCanvas.height !== bmp.height) {
+                drawCanvas.width = bmp.width;
+                drawCanvas.height = bmp.height;
+                SBS_WIDTH = bmp.width;
+                uniforms.texSize.value.set(bmp.width, bmp.height);
+                console.log('Canvas resized to', bmp.width, bmp.height);
+                resEl.textContent = `${bmp.width}x${bmp.height}`;
+                // Re-upload texture and recalculate UVs/scaling for new resolution
+                texture.dispose();
+                applySettings();
+            }
+            drawCtx.drawImage(bmp, 0, 0);
+            bmp.close();
+            textureReady = true;
+            decoding = false;
+            if (latestFrameData) processLatestFrame();
+        }).catch((e) => {
+            console.error('Frame decode failed:', e);
+            decoding = false;
+        });
+    }
+
+    // --- WebSocket with auto-reconnect ---
+    let autoReconnect = true;
+    let reconnectTimer = null;
+    let reconnectAttempts = 0;
+    const RECONNECT_DELAY = 2000; // ms between reconnect attempts
+
+    function updateStatus(state, text) {
+        statusEl.className = state;
+        statusEl.textContent = text;
+    }
+
+    function startStream() {
+        console.log('startStream called, attempt:', reconnectAttempts);
+        autoReconnect = true;
+        clearTimeout(reconnectTimer);
+
+        const label = reconnectAttempts > 0
+            ? `Reconnecting (#${reconnectAttempts})...`
+            : 'Connecting...';
+        updateStatus('connecting', label);
+        startBtn.disabled = true;
+
+        const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
+        debugEl.textContent = `connecting to ${wsUrl} (#${reconnectAttempts})`;
+
+        try {
+            ws = new WebSocket(wsUrl);
+        } catch (e) {
+            debugEl.textContent = `WS create failed: ${e.message}`;
+            console.error('WebSocket creation failed:', e);
+            if (autoReconnect) {
+                reconnectAttempts++;
+                reconnectTimer = setTimeout(startStream, RECONNECT_DELAY);
+            }
+            return;
+        }
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = () => {
+            console.log('WebSocket connected');
+            reconnectAttempts = 0;
+            updateStatus('connected', 'Connected');
+            stopBtn.disabled = false;
+            debugEl.textContent = 'ws open';
+        };
+
+        ws.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                try { handleServerMessage(JSON.parse(event.data)); } catch(e) {}
+                return;
+            }
+
+            latestFrameData = event.data;
+            processLatestFrame();
+
+            frameCount++;
+            fsEl.textContent = `${(event.data.byteLength / 1024).toFixed(0)} KB`;
+            const now = performance.now();
+            if (now - lastFpsTime >= 1000) {
+                fpsEl.textContent = frameCount;
+                frameCount = 0;
+                lastFpsTime = now;
+            }
+        };
+
+        ws.onclose = (e) => {
+            console.log('WebSocket closed:', e.code, e.reason);
+            ws = null;
+            if (autoReconnect) {
+                reconnectAttempts++;
+                const msg = `ws closed (${e.code}), retry #${reconnectAttempts} in ${RECONNECT_DELAY/1000}s`;
+                updateStatus('connecting', `Reconnect #${reconnectAttempts}...`);
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+                debugEl.textContent = msg;
+                console.log(msg);
+                reconnectTimer = setTimeout(startStream, RECONNECT_DELAY);
+            } else {
+                updateStatus('disconnected', 'Disconnected');
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                debugEl.textContent = `ws closed: ${e.code}`;
+            }
+        };
+
+        ws.onerror = (e) => {
+            console.error('WebSocket error:', e);
+            debugEl.textContent = `ws error (retry #${reconnectAttempts + 1} pending)`;
+            // onclose will fire after onerror, reconnect handled there
+        };
+    }
+
+    function stopStream() {
+        autoReconnect = false;
+        reconnectAttempts = 0;
+        clearTimeout(reconnectTimer);
+        if (ws) { ws.close(); ws = null; }
+        updateStatus('disconnected', 'Disconnected');
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+    }
+
+    startBtn.addEventListener('click', () => startStream());
+    stopBtn.addEventListener('click', () => stopStream());
+    window.addEventListener('beforeunload', stopStream);
+
+    debugEl.textContent = 'ready';
+    console.log('Init complete');
+    </script>
+</body>
+</html>
