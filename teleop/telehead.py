@@ -30,6 +30,8 @@ import time
 
 import numpy as np
 
+from robot_control import load_home_position
+
 logger = logging.getLogger(__name__)
 
 # --- Quaternion utilities ---
@@ -119,7 +121,16 @@ class TeleHead:
         """Connect to the robot and set up IK."""
         if self.use_robot:
             from robot_control import StereoBotServo
-            self.servo = StereoBotServo.connect(self.robot_port)
+
+            # Use resting position as URDF zero reference so that joint angles
+            # match the URDF convention and ikpy joint limits are correct.
+            urdf_zero = None
+            if self.resting_path and os.path.exists(self.resting_path):
+                urdf_zero = load_home_position(self.resting_path)
+                if urdf_zero:
+                    logger.info(f"URDF zero from resting position: {self.resting_path}")
+
+            self.servo = StereoBotServo.connect(self.robot_port, urdf_zero=urdf_zero)
             logger.info(f"Robot connected on {self.robot_port}")
 
         if self.use_ik:
@@ -130,7 +141,6 @@ class TeleHead:
             # Set home position
             home = None
             if self.home_path and os.path.exists(self.home_path):
-                from robot_control import load_home_position
                 raw_home = load_home_position(self.home_path)
                 if raw_home and self.servo:
                     home = self.servo.raw_to_relative(raw_home)
@@ -159,7 +169,6 @@ class TeleHead:
             logger.info(f"No {label} position file at {filepath}, skipping move")
             return False
 
-        from robot_control import load_home_position
         raw = load_home_position(filepath)
         if not raw:
             return False
@@ -185,7 +194,6 @@ class TeleHead:
         if self._move_to_named_position(self.home_path, "home"):
             # Resync smoothed angles to match the home position
             if self.servo and self.ik:
-                from robot_control import load_home_position
                 raw_home = load_home_position(self.home_path)
                 if raw_home:
                     self._smoothed_q = self.servo.raw_to_relative(raw_home)
@@ -504,6 +512,13 @@ def main():
     app = web.Application()
     app.router.add_get("/", teleop_server.index)
     app.router.add_get("/ws", teleop_server.websocket_stream)
+
+    # Bind asyncio event loop to capture for event-driven frame streaming
+    cap_ref = teleop_server.camera_capture
+    if cap_ref is not None and hasattr(cap_ref, 'set_event_loop'):
+        async def on_startup(app):
+            cap_ref.set_event_loop(asyncio.get_running_loop())
+        app.on_startup.append(on_startup)
 
     local_ip = teleop_server.get_local_ip()
 

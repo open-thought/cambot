@@ -63,14 +63,28 @@ class StereoBotServo:
         self.pkt = None
         self.is_connected = False
         self._goal_sync_write = None
+        self._pos_sync_read = None
         # Delta-based encoder unwrapping state
         self._prev_raw: dict[str, int] = {}
         self._unwrapped: dict[str, int] = {}
         self._zero_raw: dict[str, int] = {}
 
     @classmethod
-    def connect(cls, port: str = "/dev/ttyACM0", baudrate: int = 1_000_000) -> "StereoBotServo":
-        """Connect to servos and initialize SRAM registers."""
+    def connect(
+        cls,
+        port: str = "/dev/ttyACM0",
+        baudrate: int = 1_000_000,
+        urdf_zero: dict[str, int] | None = None,
+    ) -> "StereoBotServo":
+        """Connect to servos and initialize SRAM registers.
+
+        Args:
+            urdf_zero: Absolute encoder positions (steps) corresponding to the
+                URDF zero pose (all joints at 0 rad).  When provided,
+                read/write_joint_angles operate relative to this reference so
+                that ikpy joint limits are correct.  Falls back to connect-time
+                readings when not provided.
+        """
         self = cls()
         self.ph = scs.PortHandler(port)
         self.pkt = scs.PacketHandler(0)  # protocol version 0 for STS series
@@ -89,20 +103,37 @@ class StereoBotServo:
                 self.ph.closePort()
                 raise RuntimeError(f"Motor {mid} ({name}) not responding")
 
-        # Init SRAM
-        for name in cls.JOINT_NAMES:
-            mid = cls.MOTOR_IDS[name]
-            self.pkt.write1ByteTxRx(self.ph, mid, ADDR_ACCELERATION, DEFAULT_ACCELERATION)
-            self.pkt.write2ByteTxRx(self.ph, mid, ADDR_TORQUE_LIMIT, DEFAULT_TORQUE_LIMIT)
+        # Init SRAM via SyncWrite (2 packets instead of 12 individual writes)
+        all_ids = [cls.MOTOR_IDS[n] for n in cls.JOINT_NAMES]
+        self._send_sync_write_raw(
+            ADDR_ACCELERATION, 1,
+            [(mid, DEFAULT_ACCELERATION) for mid in all_ids],
+        )
+        self._send_sync_write_raw(
+            ADDR_TORQUE_LIMIT, 2,
+            [(mid, DEFAULT_TORQUE_LIMIT & 0xFF, (DEFAULT_TORQUE_LIMIT >> 8) & 0xFF) for mid in all_ids],
+        )
 
-        # Capture initial positions for unwrapping
-        for name in cls.JOINT_NAMES:
-            mid = cls.MOTOR_IDS[name]
-            raw, res, _ = self.pkt.read2ByteTxRx(self.ph, mid, ADDR_PRESENT_POSITION)
-            if res == scs.COMM_SUCCESS:
-                steps = decode_sm(raw, POS_SIGN_BIT)
+        # GroupSyncRead for bulk position reads (1 USB round-trip instead of 6)
+        self._pos_sync_read = scs.GroupSyncRead(self.ph, self.pkt, ADDR_PRESENT_POSITION, 2)
+        for mid in all_ids:
+            self._pos_sync_read.addParam(mid)
+
+        # Capture initial positions for unwrapping.
+        # When urdf_zero is provided, use it as the zero reference so that
+        # joint angles match the URDF convention (0 rad = resting pose).
+        for name, steps in self._sync_read_positions().items():
+            self._prev_raw[name] = steps
+            if urdf_zero is not None and name in urdf_zero:
+                self._zero_raw[name] = urdf_zero[name]
+                delta = steps - urdf_zero[name]
+                if delta > STEPS_PER_REV // 2:
+                    delta -= STEPS_PER_REV
+                elif delta < -STEPS_PER_REV // 2:
+                    delta += STEPS_PER_REV
+                self._unwrapped[name] = delta
+            else:
                 self._zero_raw[name] = steps
-                self._prev_raw[name] = steps
                 self._unwrapped[name] = 0
 
         # Non-blocking writes for low-latency servo commands
@@ -152,16 +183,35 @@ class StereoBotServo:
         # Write directly — no flush/tcdrain
         self.ph.ser.write(pkt)
 
+    def _sync_read_positions(self) -> dict[str, int]:
+        """Read all motor positions in a single USB round-trip via GroupSyncRead.
+
+        Temporarily restores blocking write_timeout for the SyncRead request,
+        then restores the previous (non-blocking) timeout.
+        """
+        old_timeout = self.ph.ser.write_timeout
+        self.ph.ser.write_timeout = None  # blocking for SyncRead tx
+
+        result = {}
+        try:
+            comm_result = self._pos_sync_read.txRxPacket()
+            if comm_result != scs.COMM_SUCCESS:
+                return result
+            for name in self.JOINT_NAMES:
+                mid = self.MOTOR_IDS[name]
+                if not self._pos_sync_read.isAvailable(mid, ADDR_PRESENT_POSITION, 2):
+                    continue
+                raw = self._pos_sync_read.getData(mid, ADDR_PRESENT_POSITION, 2)
+                result[name] = decode_sm(raw, POS_SIGN_BIT)
+        finally:
+            self.ph.ser.write_timeout = old_timeout
+        return result
+
     def read_joint_angles(self) -> dict[str, float]:
         """Read current joint angles in radians (unwrapped from zero reference)."""
+        positions = self._sync_read_positions()
         result = {}
-        for name in self.JOINT_NAMES:
-            mid = self.MOTOR_IDS[name]
-            raw, res, _ = self.pkt.read2ByteTxRx(self.ph, mid, ADDR_PRESENT_POSITION)
-            if res != scs.COMM_SUCCESS:
-                continue
-            steps = decode_sm(raw, POS_SIGN_BIT)
-
+        for name, steps in positions.items():
             # Delta-based unwrapping
             if name in self._prev_raw:
                 delta = steps - self._prev_raw[name]
@@ -177,13 +227,7 @@ class StereoBotServo:
 
     def read_raw_positions(self) -> dict[str, int]:
         """Read raw encoder positions (steps, no unwrapping)."""
-        result = {}
-        for name in self.JOINT_NAMES:
-            mid = self.MOTOR_IDS[name]
-            raw, res, _ = self.pkt.read2ByteTxRx(self.ph, mid, ADDR_PRESENT_POSITION)
-            if res == scs.COMM_SUCCESS:
-                result[name] = decode_sm(raw, POS_SIGN_BIT)
-        return result
+        return self._sync_read_positions()
 
     def write_joint_angles(self, angles: dict[str, float]) -> None:
         """Write joint angles in radians via raw SyncWrite (no flush, minimal latency).
@@ -230,7 +274,7 @@ class StereoBotServo:
     def move_to_raw_position(self, target: dict[str, int], duration: float = 2.0, rate_hz: float = 50.0) -> None:
         """Interpolate smoothly from current position to target over duration.
 
-        Uses GroupSyncWrite to send all motor positions in a single packet
+        Uses cosine easing (zero velocity at start/end) and SyncWrite
         (1 USB round-trip per tick instead of 6).
         """
         current = self.read_raw_positions()
@@ -239,7 +283,8 @@ class StereoBotServo:
         t0 = time.monotonic()
 
         for i in range(1, n_steps + 1):
-            t = i / n_steps
+            # Cosine easing: zero velocity at start and end
+            t = 0.5 * (1.0 - math.cos(math.pi * i / n_steps))
             interp = {}
             for name in self.JOINT_NAMES:
                 if name in target and name in current:
@@ -252,11 +297,10 @@ class StereoBotServo:
                 time.sleep(remaining)
 
     def set_torque(self, enable: bool) -> None:
-        """Enable or disable torque on all motors."""
+        """Enable or disable torque on all motors via single SyncWrite."""
         val = 1 if enable else 0
-        for name in self.JOINT_NAMES:
-            mid = self.MOTOR_IDS[name]
-            self.pkt.write1ByteTxRx(self.ph, mid, ADDR_TORQUE_ENABLE, val)
+        all_ids = [self.MOTOR_IDS[n] for n in self.JOINT_NAMES]
+        self._send_sync_write_raw(ADDR_TORQUE_ENABLE, 1, [(mid, val) for mid in all_ids])
 
     def disconnect(self) -> None:
         """Disable torque and close port."""
