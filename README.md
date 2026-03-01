@@ -1,6 +1,6 @@
 # StereoBot
 
-6-DOF camera arm for stereo vision, built with Feetech STS3215 servos and a ZED Mini stereo camera.
+6-DOF camera arm for stereo vision, built with Feetech STS3215 servos and a ZED Mini stereo camera. Includes a VR teleop system for real-time head tracking from a Meta Quest 3.
 
 ## Hardware
 
@@ -11,36 +11,92 @@
 ## Project Structure
 
 ```
-urdf/               URDF model and STL meshes (meters, +X fwd, +Z up)
-3dprint/            STL files for 3D printing (mm scale)
-visualize_urdf.py   Interactive 3D visualization (viser) with live servo input
-calibrate_limits.py Passive joint limit calibration tool
-servo_offset.py     Homing offset / zero-point calibration
-servo_test.py       Interactive curses-based servo test (keyboard control)
-waypoint_nav.py     Waypoint navigation
+cambot/
+  servo/              Shared servo communication layer
+    constants.py      Register addresses, motor config, conversions
+    protocol.py       Wire protocol (decode/encode, connect, EPROM helpers)
+    controller.py     StereoBotServo class, save/load calibration
+  teleop/             VR teleop application
+    app.py            Main entry point (TeleHead control loop)
+    server.py         HTTPS + WebSocket server (aiohttp)
+    ik_solver.py      IK solver (ikpy + URDF)
+    capture.py        ZED Mini / fallback camera capture
+    webrtc.py         WebRTC H.264 video track
+    client/           Quest 3 VR viewer (Three.js + WebXR)
+  tools/              CLI diagnostic and setup tools
+    servo_test.py     Interactive curses servo test
+    servo_offset.py   Homing offset / zero-point calibration
+    calibrate_limits.py  Passive joint limit calibration
+    fix_servo_ids.py  Scan and assign servo IDs
+    read_params.py    Register dump / read / write
+    debug_control.py  Debug TUI with IK visualization
+    pid_tuning.py     PID auto-tuner
+    waypoint_nav.py   Record-and-replay waypoint navigation
+    visualize_urdf.py URDF visualization (viser)
+calibration/          Saved positions and calibration data
+urdf/                 URDF model and STL meshes
+3dprint/              STL files for 3D printing (mm scale)
+docs/                 Datasheets and manuals
 ```
 
-## Quick Start
+## Setup
 
-**Visualize the URDF** (browser-based, no ROS needed):
 ```bash
-pip install viser
-./visualize_urdf.py              # slider mode
-./visualize_urdf.py --live       # mirror real servo positions
+uv pip install -e .              # install cambot package (editable)
+uv pip install -e ".[viz]"       # + URDF visualization (viser)
+uv pip install -e ".[webrtc]"    # + WebRTC streaming (aiortc)
 ```
 
-**Calibrate joint limits** (passive, read-only):
+For ZED Mini support, install pyzed from the ZED SDK (not PyPI):
 ```bash
-./calibrate_limits.py
+/usr/local/zed/get_python_api.py
 ```
 
-**Test servos interactively:**
+## VR Teleop
+
+Stream stereo video to a Meta Quest 3 and control the robot arm with head tracking:
+
 ```bash
-./servo_test.py
+./run_teleop.sh                              # full mode
+./run_teleop.sh --no-robot                   # camera streaming only
+./run_teleop.sh --no-camera                  # robot control only
+./run_teleop.sh --no-zed                     # use fallback camera
 ```
+
+Open the displayed HTTPS URL on the Quest 3, enter VR, then press Enter in the terminal to calibrate the neutral head position. Press P to toggle position tracking.
+
+### Safety features
+
+Position tracking mode has built-in safety limits:
+
+- **Position delta sphere** (default 15cm): limits end-effector displacement from home. `--max-pos-delta 0.20` for 20cm, or `--max-pos-delta 0` to disable.
+- **Workspace bounding box**: hard axis-aligned limits in robot frame. `--workspace-bounds xmin,xmax,ymin,ymax,zmin,zmax` (meters). Auto-disables the default sphere.
+- **Pose watchdog** (default 3s): smoothly returns to home if VR data stops (headset removed, connection lost). `--watchdog-timeout 5.0` or `--watchdog-timeout 0` to disable.
+
+Additional safety: EMA smoothing, velocity clamping (20 rad/s), FK validation, torque limiting (90%).
+
+## Tools
+
+All tools have shell script wrappers in the project root:
+
+```bash
+./run_servo_test.sh              # interactive servo test (curses TUI)
+./run_servo_offset.sh            # homing offset calibration
+./run_calibrate_limits.sh        # passive joint limit calibration
+./run_fix_servo_ids.sh           # scan/set servo IDs
+./run_read_params.sh             # register dump
+./run_debug_control.sh           # debug TUI with IK
+./run_pid_tuning.sh              # PID auto-tuner
+./run_waypoint_nav.sh            # record/replay waypoints
+./run_visualize_urdf.sh          # URDF 3D viewer (browser)
+```
+
+Or run directly as Python modules: `uv run python -m cambot.tools.servo_test`
 
 ## Dependencies
 
-- Python 3.10+
-- `scservo_sdk` (Feetech servo communication)
-- `viser` + `yourdfpy` (URDF visualization)
+- Python 3.12+
+- `feetech-servo-sdk` (servo communication, imported as `scservo_sdk`)
+- `numpy`, `scipy`, `ikpy` (IK solver)
+- `aiohttp`, `opencv-python` (teleop server + video)
+- Optional: `pyzed` (ZED SDK), `viser` (URDF viz), `aiortc` (WebRTC)
