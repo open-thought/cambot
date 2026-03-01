@@ -835,6 +835,7 @@
     hudMesh.layers.enable(1);
     hudMesh.layers.enable(2);
     hudMesh.visible = false;
+    hudMesh.userData.useMidpoint = true;
     scene.add(hudMesh);
 
     let lastHudUpdate = 0;
@@ -1050,9 +1051,18 @@
     const _lockPos = new THREE.Vector3();
     const _lockQuat = new THREE.Quaternion();
     const _tiltQuat = new THREE.Quaternion();
+    const _eyePosR = new THREE.Vector3();
     function lockToHead(mesh, cam) {
         cam.getWorldPosition(_lockPos);
         cam.getWorldQuaternion(_lockQuat);
+        // Three.js ArrayCamera copies matrixWorld from the left eye, not the
+        // head center.  For meshes visible to both eyes (e.g. HUD), compute
+        // the true midpoint between left and right eye cameras.
+        if (mesh.userData.useMidpoint && cam.cameras && cam.cameras.length >= 2) {
+            cam.cameras[0].getWorldPosition(_lockPos);
+            cam.cameras[1].getWorldPosition(_eyePosR);
+            _lockPos.lerp(_eyePosR, 0.5);
+        }
         const off = mesh.userData.offset;
         const pos = off.clone().applyQuaternion(_lockQuat).add(_lockPos);
         mesh.position.copy(pos);
