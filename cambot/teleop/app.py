@@ -91,6 +91,9 @@ class TeleHead:
         home_path: str | None = None,
         resting_path: str | None = None,
         position_scale: float = 1.0,
+        workspace_bounds: dict[str, tuple[float, float]] | None = None,
+        max_position_delta: float | None = None,
+        watchdog_timeout: float = 3.0,
     ):
         self.use_robot = use_robot
         self.use_ik = use_ik
@@ -101,6 +104,9 @@ class TeleHead:
         self.home_path = home_path
         self.resting_path = resting_path
         self.position_scale = position_scale
+        self.workspace_bounds = workspace_bounds
+        self.max_position_delta = max_position_delta
+        self.watchdog_timeout = watchdog_timeout
 
         self.servo = None
         self.ik = None
@@ -124,6 +130,10 @@ class TeleHead:
         self._cam_thread: threading.Thread | None = None
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._switching_resolution: bool = False
+
+        # Watchdog: track last pose timestamp for timeout detection
+        self._last_pose_time: float = 0.0
+        self._watchdog_active: bool = False
 
         # Telemetry (updated by control loop, read by server)
         self._telemetry = {
@@ -151,7 +161,11 @@ class TeleHead:
 
         if self.use_ik:
             from cambot.teleop.ik_solver import StereoBotIK, JOINT_NAMES
-            self.ik = StereoBotIK(position_scale=self.position_scale)
+            self.ik = StereoBotIK(
+                position_scale=self.position_scale,
+                workspace_bounds=self.workspace_bounds,
+                max_position_delta=self.max_position_delta,
+            )
             logger.info(f"IK solver loaded ({self.ik.n_active} active joints)")
 
             # Set home position
@@ -258,7 +272,9 @@ class TeleHead:
 
     def on_head_pose(self, pose: dict):
         """Callback for new head pose data from the server."""
-        pose["_recv_ts"] = time.monotonic()
+        now = time.monotonic()
+        pose["_recv_ts"] = now
+        self._last_pose_time = now
         with self._lock:
             self._latest_pose = pose
         self._pose_event.set()
@@ -271,6 +287,7 @@ class TeleHead:
             and getattr(self.ik, '_vr_neutral_inv', None) is not None
         )
         t['position_tracking'] = self.position_tracking
+        t['watchdog_active'] = self._watchdog_active
         return t
 
     def _create_and_start_camera(self, resolution: str, use_zed: bool,
@@ -403,6 +420,38 @@ class TeleHead:
             if self._moving_to_position:
                 continue
 
+            # Pose watchdog: if no VR pose received for watchdog_timeout seconds,
+            # smoothly return toward home position to prevent unsafe drift.
+            if (self.watchdog_timeout > 0
+                    and self._last_pose_time > 0
+                    and self._smoothed_q is not None
+                    and self.ik is not None
+                    and self.ik._home_joint_angles is not None):
+                pose_age = loop_start - self._last_pose_time
+                if pose_age > self.watchdog_timeout:
+                    if not self._watchdog_active:
+                        logger.warning(
+                            f"Pose watchdog triggered ({pose_age:.1f}s without VR data) "
+                            f"— returning to home")
+                        self._watchdog_active = True
+                    # Blend toward home at the same velocity-limited rate
+                    home_q = self.ik._home_joint_angles
+                    new_q = {}
+                    for name in JOINT_NAMES:
+                        current_val = self._smoothed_q.get(name, 0.0)
+                        home_val = home_q.get(name, 0.0)
+                        delta = home_val - current_val
+                        if abs(delta) > max_dq:
+                            delta = math.copysign(max_dq, delta)
+                        new_q[name] = current_val + delta
+                    self._smoothed_q = new_q
+                    if self.servo and self.servo.is_connected:
+                        self.servo.write_joint_angles(new_q)
+                    continue
+                elif self._watchdog_active:
+                    logger.info("Pose watchdog cleared — VR data resumed")
+                    self._watchdog_active = False
+
             if pose is not None and self.ik is not None:
                 q_vr = pose.get("q")
                 p_vr = pose.get("p", {"x": 0, "y": 0, "z": 0})
@@ -528,6 +577,13 @@ def main():
                         help="Max joint velocity (rad/s)")
     parser.add_argument("--position-scale", type=float, default=1.0,
                         help="Scale factor for VR head translation (default: 1.0)")
+    parser.add_argument("--max-pos-delta", type=float, default=None,
+                        help="Max position delta from home in meters (safety sphere radius, default: 0.15; "
+                             "auto-disabled when --workspace-bounds is set)")
+    parser.add_argument("--workspace-bounds", type=str, default=None,
+                        help="Workspace bounding box as 'xmin,xmax,ymin,ymax,zmin,zmax' (meters, robot frame)")
+    parser.add_argument("--watchdog-timeout", type=float, default=3.0,
+                        help="Seconds without VR pose before returning to home (0=disabled, default: 3.0)")
     parser.add_argument("--resolution", default="720p", choices=["vga", "720p", "1080p", "2k"],
                         help="Camera resolution (default: 720p)")
     parser.add_argument("--camera-fps", type=int, default=None,
@@ -565,6 +621,31 @@ def main():
 
     from cambot.teleop import server as teleop_server
 
+    # Parse workspace bounds (format: "xmin,xmax,ymin,ymax,zmin,zmax")
+    workspace_bounds = None
+    if args.workspace_bounds:
+        try:
+            vals = [float(v) for v in args.workspace_bounds.split(",")]
+            if len(vals) != 6:
+                raise ValueError("need exactly 6 values")
+            workspace_bounds = {
+                'x': (vals[0], vals[1]),
+                'y': (vals[2], vals[3]),
+                'z': (vals[4], vals[5]),
+            }
+            logger.info(f"Workspace bounds: x=[{vals[0]:.3f},{vals[1]:.3f}] "
+                        f"y=[{vals[2]:.3f},{vals[3]:.3f}] z=[{vals[4]:.3f},{vals[5]:.3f}]")
+        except ValueError as e:
+            logger.error(f"Invalid --workspace-bounds '{args.workspace_bounds}': {e}")
+            sys.exit(1)
+
+    # Resolve max_pos_delta: default 0.15m unless workspace_bounds is set
+    max_pos_delta = args.max_pos_delta
+    if max_pos_delta is None:
+        if workspace_bounds is None:
+            max_pos_delta = 0.15  # safe default
+        # else: workspace_bounds provided without explicit --max-pos-delta → no sphere
+
     # --- TeleHead setup ---
     telehead = TeleHead(
         robot_port=args.port,
@@ -575,6 +656,9 @@ def main():
         home_path=home_path,
         resting_path=resting_path,
         position_scale=args.position_scale,
+        workspace_bounds=workspace_bounds,
+        max_position_delta=max_pos_delta,
+        watchdog_timeout=args.watchdog_timeout,
     )
     telehead.connect()
 
@@ -714,6 +798,15 @@ def main():
     webrtc_label = 'enabled (H.264)' if webrtc_enabled else 'disabled (WS JPEG only)'
     print(f"  WebRTC: {webrtc_label}")
     print(f"  IK: {'active' if telehead.ik else 'disabled'}")
+    # Safety settings
+    safety_parts = []
+    if args.watchdog_timeout > 0:
+        safety_parts.append(f"watchdog={args.watchdog_timeout:.1f}s")
+    if args.max_pos_delta is not None:
+        safety_parts.append(f"max_delta={args.max_pos_delta:.3f}m")
+    if workspace_bounds:
+        safety_parts.append("workspace_bounds=ON")
+    print(f"  Safety: {', '.join(safety_parts) if safety_parts else 'defaults'}")
     print()
     print("  Open the URL on Quest 3, enter VR, then:")
     print("  Press ENTER to calibrate neutral head position.")

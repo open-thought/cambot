@@ -74,7 +74,9 @@ class StereoBotIK:
     """IK solver for the StereoBot arm."""
 
     def __init__(self, urdf_path: str | Path | None = None, position_scale: float = 1.0,
-                 validate_interval: int = 5):
+                 validate_interval: int = 5,
+                 workspace_bounds: dict[str, tuple[float, float]] | None = None,
+                 max_position_delta: float | None = None):
         import warnings
         import ikpy.chain
         import scipy.optimize
@@ -185,6 +187,15 @@ class StereoBotIK:
         # Debug: last computed position delta in robot frame (meters)
         self._last_p_delta_robot: np.ndarray = np.zeros(3)
 
+        # Safety: workspace bounding box (robot frame, meters).
+        # Keys: 'x', 'y', 'z', each a (min, max) tuple.
+        # None = no bounds (unlimited workspace).
+        self._workspace_bounds = workspace_bounds
+
+        # Safety: max position delta from home (meters, sphere radius).
+        # None = no limit.
+        self._max_position_delta = max_position_delta
+
     def _angles_dict_to_array(self, angles: dict[str, float]) -> np.ndarray:
         """Convert joint angle dict to full ikpy array (with zeros for inactive links)."""
         q = np.zeros(self.n_links)
@@ -276,6 +287,12 @@ class StereoBotIK:
         else:
             p_delta_robot = np.zeros(3)
 
+        # Safety: clamp position delta to max radius from home
+        if self._max_position_delta is not None:
+            norm = np.linalg.norm(p_delta_robot)
+            if norm > self._max_position_delta:
+                p_delta_robot = p_delta_robot * (self._max_position_delta / norm)
+
         self._last_p_delta_robot = p_delta_robot
 
         # Orientation: apply delta in world frame (left multiply).
@@ -284,6 +301,15 @@ class StereoBotIK:
         target = self._home_ee_pose.copy()
         target[:3, :3] = R_delta_robot @ self._home_ee_pose[:3, :3]
         target[:3, 3] = self._home_ee_pose[:3, 3] + p_delta_robot
+
+        # Safety: clamp EE position to workspace bounding box
+        if self._workspace_bounds is not None:
+            pos = target[:3, 3]
+            for axis_idx, axis_name in enumerate(['x', 'y', 'z']):
+                if axis_name in self._workspace_bounds:
+                    lo, hi = self._workspace_bounds[axis_name]
+                    pos[axis_idx] = np.clip(pos[axis_idx], lo, hi)
+            target[:3, 3] = pos
 
         return target
 
