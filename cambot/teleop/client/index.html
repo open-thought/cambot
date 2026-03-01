@@ -90,8 +90,8 @@
             <input type="range" id="screenYSlider" min="-2.0" max="1.0" step="0.05" value="-0.35">
         </div>
         <div class="setting">
-            <label>HUD Y <span id="hudYVal">-0.25</span>m</label>
-            <input type="range" id="hudYSlider" min="-1.0" max="0.5" step="0.05" value="-0.25">
+            <label>HUD Y <span id="hudYVal">-0.40</span>m</label>
+            <input type="range" id="hudYSlider" min="-1.0" max="0.5" step="0.05" value="-0.40">
         </div>
 
         <div class="setting-group">
@@ -217,7 +217,7 @@
     let hudVisible = true;
 
     // --- Settings ---
-    const DEFAULTS = { dist: 2.5, fov: 90, screenY: -0.35, hudY: -0.25, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
+    const DEFAULTS = { dist: 2.5, fov: 90, screenY: -0.35, hudY: -0.40, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
     const settings = { ...DEFAULTS };
     let syncEnabled = true;
 
@@ -939,7 +939,7 @@
         // Line 3: Controller hints
         ctx.font = '22px monospace';
         ctx.fillStyle = '#777';
-        ctx.fillText('[A/X] Calibrate  [B/Y] Position  [R3] Res  [L3] Transport  [LGrip] HUD', 24, y3);
+        ctx.fillText('[A/X] Calibrate  [B/Y] Position  [R3] Res  [L3] Transport  [LSqueeze] HUD', 24, y3);
 
         hudTexture.needsUpdate = true;
     }
@@ -998,10 +998,10 @@
                 prevButtons[lk] = lThumbPressed;
             }
 
-            // Left grip (index 2) = Toggle VR HUD
-            if (hand === 'left' && btns.length > 2) {
-                const gk = hand + '_2';
-                const gripPressed = btns[2].pressed;
+            // Left grip/squeeze (index 1) = Toggle VR HUD
+            if (hand === 'left' && btns.length > 1) {
+                const gk = hand + '_1';
+                const gripPressed = btns[1].pressed;
                 if (gripPressed && !prevButtons[gk]) {
                     toggleHUD();
                 }
@@ -1032,12 +1032,14 @@
         uniforms.uBrightness.value = settings.bright / 100;
         uniforms.uContrast.value = 1.0 + settings.contrast / 50;
 
-        // Position VR HUD at fixed comfortable distance (1.5m), slightly below gaze center
+        // Position VR HUD at fixed comfortable distance, below gaze center
         const hudDist = 0.5;
         const hudW = hudDist * 0.7;
         const hudH = hudW * (hudCanvas.height / hudCanvas.width);
         hudMesh.scale.set(hudW, hudH, 1);
         hudMesh.userData.offset = new THREE.Vector3(0, settings.hudY, -hudDist);
+        // Tilt HUD so its surface is orthogonal to the line from HUD to eye center
+        hudMesh.userData.tilt = Math.atan2(settings.hudY, hudDist);
 
         if (syncEnabled && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'settings_sync', settings }));
@@ -1047,6 +1049,7 @@
 
     const _lockPos = new THREE.Vector3();
     const _lockQuat = new THREE.Quaternion();
+    const _tiltQuat = new THREE.Quaternion();
     function lockToHead(mesh, cam) {
         cam.getWorldPosition(_lockPos);
         cam.getWorldQuaternion(_lockQuat);
@@ -1054,6 +1057,10 @@
         const pos = off.clone().applyQuaternion(_lockQuat).add(_lockPos);
         mesh.position.copy(pos);
         mesh.quaternion.copy(_lockQuat);
+        if (mesh.userData.tilt) {
+            _tiltQuat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), mesh.userData.tilt);
+            mesh.quaternion.multiply(_tiltQuat);
+        }
     }
 
     // --- Head Pose Sending (quaternion + position) ---
