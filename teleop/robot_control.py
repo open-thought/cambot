@@ -28,12 +28,14 @@ POS_SIGN_BIT = 15
 ADDR_TORQUE_ENABLE = 40
 ADDR_ACCELERATION = 41
 ADDR_GOAL_POSITION = 42
+ADDR_GOAL_TIME = 44
+ADDR_GOAL_VELOCITY = 46
 ADDR_TORQUE_LIMIT = 48
 ADDR_PRESENT_POSITION = 56
 
 # SRAM init values
 DEFAULT_ACCELERATION = 254
-DEFAULT_TORQUE_LIMIT = 800
+DEFAULT_TORQUE_LIMIT = 900
 
 
 def decode_sm(raw: int, sign_bit: int) -> int:
@@ -271,30 +273,112 @@ class StereoBotServo:
         if motor_data:
             self._send_sync_write_raw(ADDR_GOAL_POSITION, 2, motor_data)
 
-    def move_to_raw_position(self, target: dict[str, int], duration: float = 2.0, rate_hz: float = 50.0) -> None:
+    def _write_goal_with_velocity(self, target: dict[str, int], duration: float) -> None:
+        """Write Goal_Position + Goal_Time=0 + Goal_Velocity via single SyncWrite.
+
+        Computes per-motor velocity from distance/duration so all joints arrive
+        at roughly the same time.  Uses velocity-limited profiling
+        (Goal_Time=0, Goal_Velocity>0).
+        """
+        current = self._sync_read_positions()
+
+        motor_data = []
+        for name, steps in target.items():
+            if name not in self.MOTOR_IDS:
+                continue
+            mid = self.MOTOR_IDS[name]
+            steps = max(0, min(4095, steps))
+            dist = abs(steps - current.get(name, steps))
+            # steps/sec, minimum 1 to avoid zero (which means max speed)
+            vel = max(1, int(round(dist / duration))) if duration > 0 else 1
+            vel = min(vel, 4095)  # clamp to register range
+            motor_data.append((
+                mid,
+                steps & 0xFF, (steps >> 8) & 0xFF,
+                0, 0,  # time = 0
+                vel & 0xFF, (vel >> 8) & 0xFF,
+            ))
+        if motor_data:
+            self._send_sync_write_raw(ADDR_GOAL_POSITION, 6, motor_data)
+
+    def _clear_goal_velocity(self) -> None:
+        """Reset Goal_Velocity to 0 (max speed) on all motors.
+
+        Must be called after a velocity-profiled move completes, otherwise
+        the stale low velocity stays latched and throttles all subsequent
+        position writes.
+        """
+        all_ids = [self.MOTOR_IDS[n] for n in self.JOINT_NAMES]
+        self._send_sync_write_raw(
+            ADDR_GOAL_VELOCITY, 2,
+            [(mid, 0, 0) for mid in all_ids],
+        )
+
+    def move_to_raw_position(self, target: dict[str, int], duration: float = 2.0, rate_hz: float = 50.0, use_servo_time_profile: bool = False) -> None:
         """Interpolate smoothly from current position to target over duration.
 
-        Uses cosine easing (zero velocity at start/end) and SyncWrite
-        (1 USB round-trip per tick instead of 6).
-        """
-        current = self.read_raw_positions()
-        n_steps = max(1, int(duration * rate_hz))
-        dt = duration / n_steps
-        t0 = time.monotonic()
+        When use_servo_time_profile is False (default), uses host-side cosine
+        easing at rate_hz, sending one SyncWrite per tick.
 
-        for i in range(1, n_steps + 1):
-            # Cosine easing: zero velocity at start and end
-            t = 0.5 * (1.0 - math.cos(math.pi * i / n_steps))
-            interp = {}
-            for name in self.JOINT_NAMES:
-                if name in target and name in current:
-                    interp[name] = int(round(current[name] + t * (target[name] - current[name])))
-            self.write_raw_positions(interp)
-            # Sleep until next tick (accounts for serial I/O time)
-            next_tick = t0 + i * dt
-            remaining = next_tick - time.monotonic()
-            if remaining > 0:
-                time.sleep(remaining)
+        When use_servo_time_profile is True, sends a single SyncWrite with
+        per-motor velocity limits computed from distance/duration, offloading
+        trajectory execution to the servo firmware.
+        """
+        if use_servo_time_profile:
+            self._write_goal_with_velocity(target, duration)
+            # Wait for the servo to execute the profile
+            time.sleep(duration)
+        else:
+            current = self.read_raw_positions()
+            n_steps = max(1, int(duration * rate_hz))
+            dt = duration / n_steps
+            t0 = time.monotonic()
+
+            for i in range(1, n_steps + 1):
+                # Cosine easing: zero velocity at start and end
+                t = 0.5 * (1.0 - math.cos(math.pi * i / n_steps))
+                interp = {}
+                for name in self.JOINT_NAMES:
+                    if name in target and name in current:
+                        interp[name] = int(round(current[name] + t * (target[name] - current[name])))
+                self.write_raw_positions(interp)
+                # Sleep until next tick (accounts for serial I/O time)
+                next_tick = t0 + i * dt
+                remaining = next_tick - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
+
+        # Settle loop: keep commanding target until servos converge or timeout
+        settle_timeout = 1.0  # seconds
+        settle_threshold = 10  # steps (~0.9 deg)
+        settle_start = time.monotonic()
+        while time.monotonic() - settle_start < settle_timeout:
+            self.write_raw_positions(target)
+            time.sleep(0.05)
+            actual = self._sync_read_positions()
+            max_err = max(
+                abs(actual.get(n, 0) - target.get(n, 0))
+                for n in self.JOINT_NAMES if n in target
+            )
+            if max_err <= settle_threshold:
+                break
+
+        if use_servo_time_profile:
+            self._clear_goal_velocity()
+
+    def set_zero_reference(self, zero_raw: dict[str, int]) -> None:
+        """Update the URDF zero reference and reset unwrapped state to match."""
+        current = self._sync_read_positions()
+        for name, zero in zero_raw.items():
+            self._zero_raw[name] = zero
+            steps = current.get(name, zero)
+            delta = steps - zero
+            if delta > STEPS_PER_REV // 2:
+                delta -= STEPS_PER_REV
+            elif delta < -STEPS_PER_REV // 2:
+                delta += STEPS_PER_REV
+            self._unwrapped[name] = delta
+            self._prev_raw[name] = steps
 
     def set_torque(self, enable: bool) -> None:
         """Enable or disable torque on all motors via single SyncWrite."""
