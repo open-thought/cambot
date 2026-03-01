@@ -77,12 +77,20 @@
 
         <div class="setting-group-title">Screen</div>
         <div class="setting">
-            <label>Distance <span id="distVal">3.5</span>m</label>
-            <input type="range" id="distSlider" min="0.3" max="5.0" step="0.1" value="3.5">
+            <label>Distance <span id="distVal">2.5</span>m</label>
+            <input type="range" id="distSlider" min="0.3" max="5.0" step="0.1" value="2.5">
         </div>
         <div class="setting">
-            <label>Size <span id="sizeVal">6.0</span></label>
-            <input type="range" id="sizeSlider" min="0.5" max="8.0" step="0.1" value="6.0">
+            <label>FOV <span id="fovVal">90</span>&deg;</label>
+            <input type="range" id="fovSlider" min="40" max="120" step="1" value="90">
+        </div>
+        <div class="setting">
+            <label>Screen Y <span id="screenYVal">-0.35</span>m</label>
+            <input type="range" id="screenYSlider" min="-2.0" max="1.0" step="0.05" value="-0.35">
+        </div>
+        <div class="setting">
+            <label>HUD Y <span id="hudYVal">-0.25</span>m</label>
+            <input type="range" id="hudYSlider" min="-1.0" max="0.5" step="0.05" value="-0.25">
         </div>
 
         <div class="setting-group">
@@ -114,6 +122,16 @@
             <div class="setting">
                 <label>Contrast <span id="contrastVal">0</span></label>
                 <input type="range" id="contrastSlider" min="-50" max="50" step="1" value="0">
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div class="setting-group-title">Camera</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;" id="resolutionBtns">
+                <button class="res-btn" data-res="vga" style="padding:8px 14px; font-size:13px; background:#444;">VGA</button>
+                <button class="res-btn" data-res="720p" style="padding:8px 14px; font-size:13px; background:#1a73e8;">720p</button>
+                <button class="res-btn" data-res="1080p" style="padding:8px 14px; font-size:13px; background:#444;">1080p</button>
+                <button class="res-btn" data-res="2k" style="padding:8px 14px; font-size:13px; background:#444;">2K</button>
             </div>
         </div>
 
@@ -159,13 +177,20 @@
     const robotState = { calibrated: false, position_tracking: false, calibrating: false };
     let hudDirty = true;
 
+    // Resolution state
+    const RESOLUTIONS = ['vga', '720p', '1080p', '2k'];
+    let currentResolution = '720p';
+    let resolutionSwitching = false;
+
     // --- Settings ---
-    const DEFAULTS = { dist: 3.5, size: 6.0, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
+    const DEFAULTS = { dist: 2.5, fov: 90, screenY: -0.35, hudY: -0.25, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
     const settings = { ...DEFAULTS };
     let syncEnabled = true;
 
     const distSlider = document.getElementById('distSlider');
-    const sizeSlider = document.getElementById('sizeSlider');
+    const fovSlider = document.getElementById('fovSlider');
+    const screenYSlider = document.getElementById('screenYSlider');
+    const hudYSlider = document.getElementById('hudYSlider');
     const convSlider = document.getElementById('convSlider');
     const valignSlider = document.getElementById('valignSlider');
     const swapBtn = document.getElementById('swapBtn');
@@ -173,7 +198,9 @@
     const brightSlider = document.getElementById('brightSlider');
     const contrastSlider = document.getElementById('contrastSlider');
     const distVal = document.getElementById('distVal');
-    const sizeVal = document.getElementById('sizeVal');
+    const fovVal = document.getElementById('fovVal');
+    const screenYVal = document.getElementById('screenYVal');
+    const hudYVal = document.getElementById('hudYVal');
     const convVal = document.getElementById('convVal');
     const valignVal = document.getElementById('valignVal');
     const sharpVal = document.getElementById('sharpVal');
@@ -182,14 +209,18 @@
 
     function syncUI() {
         distSlider.value = settings.dist;
-        sizeSlider.value = settings.size;
+        fovSlider.value = settings.fov;
+        screenYSlider.value = settings.screenY;
+        hudYSlider.value = settings.hudY;
         convSlider.value = settings.conv;
         valignSlider.value = settings.valign;
         sharpSlider.value = settings.sharp;
         brightSlider.value = settings.bright;
         contrastSlider.value = settings.contrast;
         distVal.textContent = settings.dist.toFixed(1);
-        sizeVal.textContent = settings.size.toFixed(1);
+        fovVal.textContent = settings.fov;
+        screenYVal.textContent = settings.screenY.toFixed(2);
+        hudYVal.textContent = settings.hudY.toFixed(2);
         convVal.textContent = settings.conv;
         valignVal.textContent = settings.valign;
         sharpVal.textContent = settings.sharp.toFixed(1);
@@ -207,9 +238,19 @@
         distVal.textContent = settings.dist.toFixed(1);
         applySettings();
     });
-    sizeSlider.addEventListener('input', (e) => {
-        settings.size = parseFloat(e.target.value);
-        sizeVal.textContent = settings.size.toFixed(1);
+    fovSlider.addEventListener('input', (e) => {
+        settings.fov = parseInt(e.target.value);
+        fovVal.textContent = settings.fov;
+        applySettings();
+    });
+    screenYSlider.addEventListener('input', (e) => {
+        settings.screenY = parseFloat(e.target.value);
+        screenYVal.textContent = settings.screenY.toFixed(2);
+        applySettings();
+    });
+    hudYSlider.addEventListener('input', (e) => {
+        settings.hudY = parseFloat(e.target.value);
+        hudYVal.textContent = settings.hudY.toFixed(2);
         applySettings();
     });
     convSlider.addEventListener('input', (e) => {
@@ -250,9 +291,9 @@
         applySettings();
     });
 
-    function sendCommand(action) {
+    function sendCommand(action, extra = {}) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(JSON.stringify({ type: 'command', action }));
+        ws.send(JSON.stringify({ type: 'command', action, ...extra }));
     }
 
     function updateRobotUI() {
@@ -263,6 +304,28 @@
         positionBtn.style.background = robotState.position_tracking ? '#1a73e8' : '#444';
         hudDirty = true;
     }
+
+    const resBtns = document.querySelectorAll('.res-btn');
+    function updateResolutionUI(switchingTo) {
+        resBtns.forEach(btn => {
+            const res = btn.dataset.res;
+            const isActive = res === currentResolution;
+            const isSwitching = switchingTo && res === switchingTo;
+            btn.style.background = isActive ? '#1a73e8' : isSwitching ? '#ffa726' : '#444';
+            btn.style.color = isSwitching ? '#000' : '#fff';
+            btn.disabled = resolutionSwitching;
+            if (isSwitching) btn.textContent = btn.dataset.res.toUpperCase() + '...';
+            else btn.textContent = res === '2k' ? '2K' : res.toUpperCase();
+        });
+    }
+
+    resBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const res = btn.dataset.res;
+            if (resolutionSwitching || res === currentResolution) return;
+            sendCommand('set_resolution', { resolution: res });
+        });
+    });
 
     function handleServerMessage(data) {
         if (data.type === 'settings_sync') {
@@ -285,6 +348,15 @@
                     seq: data.seq,
                 }));
             }
+        } else if (data.type === 'resolution_switching') {
+            resolutionSwitching = true;
+            updateResolutionUI(data.resolution);
+            hudDirty = true;
+        } else if (data.type === 'resolution_changed') {
+            resolutionSwitching = false;
+            if (!data.error) currentResolution = data.resolution;
+            updateResolutionUI();
+            hudDirty = true;
         } else if (data.type === 'telemetry') {
             rttEl.textContent = data.rtt_ms > 0 ? `${data.rtt_ms.toFixed(0)}ms` : '-';
             const f = data.frame || {};
@@ -299,6 +371,11 @@
                 robotState.calibrated = data.robot.calibrated;
                 robotState.position_tracking = data.robot.position_tracking;
                 if (!robotState.calibrating) updateRobotUI();
+            }
+            // Sync resolution from telemetry (late-join clients)
+            if (data.camera && !resolutionSwitching) {
+                currentResolution = data.camera.resolution;
+                updateResolutionUI();
             }
         }
     }
@@ -454,7 +531,7 @@
     hudTexture.generateMipmaps = false;
 
     const hudMaterial = new THREE.MeshBasicMaterial({
-        map: hudTexture, transparent: true, depthTest: false, depthWrite: false,
+        map: hudTexture, transparent: false,
     });
     const hudMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hudMaterial);
     hudMesh.frustumCulled = false;
@@ -472,11 +549,18 @@
         const w = hudCanvas.width, h = hudCanvas.height;
         ctx.clearRect(0, 0, w, h);
 
-        // Background
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-        ctx.beginPath();
-        ctx.roundRect(0, 0, w, h, 12);
-        ctx.fill();
+        // Background with subtle grid texture for vergence anchoring
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#1a1a1a';
+        ctx.lineWidth = 1;
+        for (let gx = 0; gx < w; gx += 32) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
+        for (let gy = 0; gy < h; gy += 32) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
+
+        // Visible border
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(2, 2, w - 4, h - 4);
 
         ctx.textBaseline = 'middle';
         const y1 = h * 0.33, y2 = h * 0.72;
@@ -512,6 +596,18 @@
 
         ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 30;
 
+        // Resolution
+        if (resolutionSwitching) {
+            ctx.fillStyle = '#ffa726';
+            ctx.fillText('SWITCHING...', x, y1);
+        } else {
+            ctx.fillStyle = '#fff';
+            ctx.fillText(currentResolution.toUpperCase(), x, y1);
+        }
+        x += 200;
+
+        ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 30;
+
         // RTT
         ctx.fillStyle = '#fff';
         ctx.fillText('RTT:' + rttEl.textContent, x, y1);
@@ -525,7 +621,7 @@
         // Line 2: Controller hints
         ctx.font = '24px monospace';
         ctx.fillStyle = '#aaa';
-        ctx.fillText('[A/X] Calibrate      [B/Y] Toggle Position', 24, y2);
+        ctx.fillText('[A/X] Calibrate  [B/Y] Position  [R3] Resolution', 24, y2);
 
         hudTexture.needsUpdate = true;
     }
@@ -561,11 +657,23 @@
                 sendCommand('toggle_position');
             }
             prevButtons[sk] = secondaryPressed;
+
+            // Right thumbstick click (index 3) = Cycle Resolution
+            if (hand === 'right' && btns.length > 3) {
+                const rk = hand + '_3';
+                const thumbPressed = btns[3].pressed;
+                if (thumbPressed && !prevButtons[rk] && !resolutionSwitching) {
+                    const idx = RESOLUTIONS.indexOf(currentResolution);
+                    const nextRes = RESOLUTIONS[(idx + 1) % RESOLUTIONS.length];
+                    sendCommand('set_resolution', { resolution: nextRes });
+                }
+                prevButtons[rk] = thumbPressed;
+            }
         }
     }
 
     function applySettings() {
-        const w = settings.size;
+        const w = 2 * settings.dist * Math.tan(settings.fov * Math.PI / 360);
         const h = w / EYE_ASPECT;
 
         leftMesh.scale.set(w, h, 1);
@@ -579,18 +687,19 @@
         setUVs(leftMesh, leftBase, convPx, 0);
         setUVs(rightMesh, rightBase, -convPx, vPx);
 
-        leftMesh.userData.offset = new THREE.Vector3(0, -0.35, -settings.dist);
-        rightMesh.userData.offset = new THREE.Vector3(0, -0.35, -settings.dist);
+        leftMesh.userData.offset = new THREE.Vector3(0, settings.screenY, -settings.dist);
+        rightMesh.userData.offset = new THREE.Vector3(0, settings.screenY, -settings.dist);
 
         uniforms.uSharpen.value = settings.sharp;
         uniforms.uBrightness.value = settings.bright / 100;
         uniforms.uContrast.value = 1.0 + settings.contrast / 50;
 
-        // Position VR HUD below video
-        const hudW = w * 0.42;
+        // Position VR HUD at fixed comfortable distance (1.5m), slightly below gaze center
+        const hudDist = 0.5;
+        const hudW = hudDist * 0.7;
         const hudH = hudW * (hudCanvas.height / hudCanvas.width);
         hudMesh.scale.set(hudW, hudH, 1);
-        hudMesh.userData.offset = new THREE.Vector3(0, -0.35 - h / 2 - hudH / 2 - 0.06, -settings.dist);
+        hudMesh.userData.offset = new THREE.Vector3(0, settings.hudY, -hudDist);
 
         if (syncEnabled && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'settings_sync', settings }));

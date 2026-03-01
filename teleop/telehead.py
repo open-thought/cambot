@@ -109,7 +109,7 @@ class TeleHead:
         self._latest_pose = None
         self._running = False
         self._moving_to_position = False
-        self.position_tracking = False  # toggled via 'p' key
+        self.position_tracking = False
 
         # Smoothed joint angles (radians)
         self._smoothed_q: dict[str, float] | None = None
@@ -117,6 +117,12 @@ class TeleHead:
         # IK failure tracking
         self._consecutive_failures = 0
         self._last_failure_log = 0.0
+
+        # Camera lifecycle
+        self._camera_config: dict | None = None  # {resolution, fps, quality, use_zed}
+        self._cam_thread: threading.Thread | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._switching_resolution: bool = False
 
         # Telemetry (updated by control loop, read by server)
         self._telemetry = {
@@ -241,6 +247,106 @@ class TeleHead:
         )
         t['position_tracking'] = self.position_tracking
         return t
+
+    def _create_and_start_camera(self, resolution: str, use_zed: bool,
+                                   quality: int, explicit_fps: int | None = None) -> bool:
+        """Create a capture object, open it, bind the shared event, and start the thread.
+
+        Updates server.camera_capture and server.current_resolution on success.
+        Returns True on success.
+        """
+        import server as teleop_server
+        from zed_capture import create_capture
+
+        fps_map = {"vga": 100, "720p": 60, "1080p": 30, "2k": 15}
+        cam_fps = explicit_fps if explicit_fps is not None else fps_map.get(resolution, 60)
+
+        if use_zed:
+            cap = create_capture(use_zed=True, resolution=resolution, fps=cam_fps)
+        else:
+            res_map = {"vga": (672, 376), "720p": (1280, 720),
+                       "1080p": (1920, 1080), "2k": (2208, 1242)}
+            w, h = res_map.get(resolution, (1280, 720))
+            cap = create_capture(use_zed=False, camera_index=0, width=w, height=h, fps=cam_fps)
+
+        import cv2
+        cap._encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+
+        if not cap.open():
+            logger.error(f"Failed to open camera at {resolution}")
+            return False
+
+        # Bind shared frame event
+        if self._event_loop is not None and teleop_server.frame_ready_event is not None:
+            cap.set_external_event(self._event_loop, teleop_server.frame_ready_event)
+
+        teleop_server.camera_capture = cap
+        teleop_server.current_resolution = resolution
+
+        self._cam_thread = threading.Thread(target=cap.capture_loop, daemon=True)
+        self._cam_thread.start()
+
+        self._camera_config = {
+            'resolution': resolution, 'fps': cam_fps,
+            'quality': quality, 'use_zed': use_zed,
+        }
+        logger.info(f"Camera started: {resolution}@{cam_fps}fps q{quality} "
+                     f"({'ZED' if use_zed else 'fallback'})")
+        return True
+
+    def switch_resolution(self, resolution: str) -> bool:
+        """Switch camera resolution at runtime. Blocks during the swap (~1-2s).
+
+        Returns True on success.
+        """
+        import server as teleop_server
+
+        if self._switching_resolution:
+            logger.warning("Resolution switch already in progress")
+            return False
+
+        cfg = self._camera_config
+        if cfg is None:
+            logger.warning("No camera configured, cannot switch")
+            return False
+
+        if cfg['resolution'] == resolution:
+            logger.info(f"Already at {resolution}")
+            return True
+
+        self._switching_resolution = True
+        prev_resolution = cfg['resolution']
+        try:
+            # 1. Detach capture so frame loops skip
+            old_cap = teleop_server.camera_capture
+            teleop_server.camera_capture = None
+
+            # 2. Stop capture loop, wait for thread, then close device
+            if old_cap is not None:
+                old_cap.stop()
+            if self._cam_thread is not None:
+                self._cam_thread.join(3.0)
+            if old_cap is not None:
+                old_cap.close()
+
+            # 3. Open new capture
+            if self._create_and_start_camera(
+                resolution, cfg['use_zed'], cfg['quality']
+            ):
+                logger.info(f"Resolution switched: {prev_resolution} -> {resolution}")
+                return True
+            else:
+                # Attempt to restore previous resolution
+                logger.warning(f"Switch to {resolution} failed, restoring {prev_resolution}")
+                if self._create_and_start_camera(
+                    prev_resolution, cfg['use_zed'], cfg['quality']
+                ):
+                    return False
+                else:
+                    logger.error("Failed to restore previous resolution!")
+                    return False
+        finally:
+            self._switching_resolution = False
 
     def control_loop(self):
         """Main IK control loop. Event-driven with rate_hz ceiling."""
@@ -486,35 +592,12 @@ def main():
 
     # --- Camera setup ---
     if not args.no_camera:
-        from zed_capture import create_capture
-
-        # Auto-select FPS based on resolution if not specified
-        cam_fps = args.camera_fps
-        if cam_fps is None:
-            cam_fps = {"vga": 100, "720p": 60, "1080p": 30, "2k": 15}[args.resolution]
-
         use_zed = not args.no_zed
-        if use_zed:
-            cap = create_capture(use_zed=True, resolution=args.resolution, fps=cam_fps)
-        else:
-            res_map = {"vga": (672, 376), "720p": (1280, 720), "1080p": (1920, 1080), "2k": (2208, 1242)}
-            w, h = res_map[args.resolution]
-            cap = create_capture(use_zed=False, camera_index=0, width=w, height=h, fps=cam_fps)
-
-        import cv2
-        cap._encode_params = [cv2.IMWRITE_JPEG_QUALITY, args.jpeg_quality]
-
-        if not cap.open():
+        if not telehead._create_and_start_camera(
+            args.resolution, use_zed, args.jpeg_quality, args.camera_fps
+        ):
             logger.error("Failed to open camera")
             sys.exit(1)
-
-        teleop_server.camera_capture = cap
-
-        # Start capture loop in daemon thread
-        # WebSocket handler reads cap.latest_jpeg directly — no polling thread needed
-        cam_thread = threading.Thread(target=cap.capture_loop, daemon=True)
-        cam_thread.start()
-        logger.info("Camera capture started")
     else:
         logger.info("Running without camera (--no-camera)")
 
@@ -565,12 +648,15 @@ def main():
     app.router.add_get("/", teleop_server.index)
     app.router.add_get("/ws", teleop_server.websocket_stream)
 
-    # Bind asyncio event loop to capture for event-driven frame streaming
-    cap_ref = teleop_server.camera_capture
-    if cap_ref is not None and hasattr(cap_ref, 'set_event_loop'):
-        async def on_startup(app):
-            cap_ref.set_event_loop(asyncio.get_running_loop())
-        app.on_startup.append(on_startup)
+    # Initialize shared frame event and bind to capture on startup
+    async def on_startup(app):
+        loop = asyncio.get_running_loop()
+        telehead._event_loop = loop
+        event = teleop_server.init_frame_event(loop)
+        cap_ref = teleop_server.camera_capture
+        if cap_ref is not None and hasattr(cap_ref, 'set_external_event'):
+            cap_ref.set_external_event(loop, event)
+    app.on_startup.append(on_startup)
 
     local_ip = teleop_server.get_local_ip()
 
@@ -586,9 +672,10 @@ def main():
     print(f"  StereoBot TeleHead: https://{local_ip}:{args.server_port}")
     print(f"  Robot: {'connected on ' + args.port if not args.no_robot else 'DISABLED'}")
     cam_info = 'DISABLED'
-    if not args.no_camera:
-        cam_type = 'ZED Mini' if not args.no_zed else 'fallback'
-        cam_info = f"{cam_type} {args.resolution}@{cam_fps}fps q{args.jpeg_quality}"
+    if not args.no_camera and telehead._camera_config:
+        cfg = telehead._camera_config
+        cam_type = 'ZED Mini' if cfg['use_zed'] else 'fallback'
+        cam_info = f"{cam_type} {cfg['resolution']}@{cfg['fps']}fps q{cfg['quality']}"
     print(f"  Camera: {cam_info}")
     print(f"  IK: {'active' if telehead.ik else 'disabled'}")
     print()

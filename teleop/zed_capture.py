@@ -130,10 +130,27 @@ class ZedMiniCapture:
         self._loop = loop
         self._frame_event = asyncio.Event()
 
+    def set_external_event(self, loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+        """Use a server-owned asyncio.Event instead of creating our own."""
+        self._loop = loop
+        self._frame_event = event
+
     @property
     def frame_event(self) -> asyncio.Event | None:
         """Asyncio event set when a new frame is available."""
         return self._frame_event
+
+    @property
+    def resolution_label(self) -> str:
+        """Return a human-readable resolution label."""
+        res_map = {
+            (672, 376): "vga", (1280, 720): "720p",
+            (1920, 1080): "1080p", (2208, 1242): "2k",
+        }
+        if self._stereo_buffer is not None:
+            h, w2, _ = self._stereo_buffer.shape
+            return res_map.get((w2 // 2, h), f"{w2 // 2}x{h}")
+        return "unknown"
 
     @property
     def latest_jpeg(self) -> bytes | None:
@@ -147,8 +164,12 @@ class ZedMiniCapture:
         with self._frame_lock:
             return self._latest_capture_ts
 
+    def stop(self) -> None:
+        """Signal the capture loop to stop (does not close the camera)."""
+        self._opened = False
+
     def close(self) -> None:
-        """Close the ZED camera."""
+        """Close the ZED camera. Ensure capture loop has exited first."""
         self._opened = False
         self.zed.close()
         print("ZED camera closed.")
@@ -203,7 +224,7 @@ class FallbackCapture:
 
     def _generate_test_frame(self) -> bytes:
         """Generate a side-by-side test pattern."""
-        h, w = 720, 1280
+        h, w = self._height, self._width
         frame = np.zeros((h, w * 2, 3), dtype=np.uint8)
         # Left eye: cyan
         frame[:, :w] = (200, 200, 0)
@@ -261,10 +282,24 @@ class FallbackCapture:
         self._loop = loop
         self._frame_event = asyncio.Event()
 
+    def set_external_event(self, loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+        """Use a server-owned asyncio.Event instead of creating our own."""
+        self._loop = loop
+        self._frame_event = event
+
     @property
     def frame_event(self) -> asyncio.Event | None:
         """Asyncio event set when a new frame is available."""
         return self._frame_event
+
+    @property
+    def resolution_label(self) -> str:
+        """Return a human-readable resolution label."""
+        res_map = {
+            (672, 376): "vga", (1280, 720): "720p",
+            (1920, 1080): "1080p", (2208, 1242): "2k",
+        }
+        return res_map.get((self._width, self._height), f"{self._width}x{self._height}")
 
     @property
     def latest_jpeg(self) -> bytes | None:
@@ -276,7 +311,12 @@ class FallbackCapture:
         with self._frame_lock:
             return self._latest_capture_ts
 
+    def stop(self) -> None:
+        """Signal the capture loop to stop (does not release the camera)."""
+        self._opened = False
+
     def close(self) -> None:
+        """Close the camera. Ensure capture loop has exited first."""
         self._opened = False
         if self._cap is not None:
             self._cap.release()
