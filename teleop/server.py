@@ -20,6 +20,13 @@ from aiohttp import web
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- WebRTC (optional) ---
+try:
+    from webrtc_track import WebRTCManager
+    HAS_WEBRTC = True
+except ImportError:
+    HAS_WEBRTC = False
+
 # --- Global state ---
 connected_ws = set()
 connected_ws_lock = asyncio.Lock()
@@ -38,6 +45,9 @@ telehead_ref = None
 # Shared frame event — survives capture object swaps during resolution switches
 frame_ready_event: asyncio.Event | None = None
 current_resolution: str = "720p"
+
+# WebRTC manager (initialized via init_webrtc())
+webrtc_manager: WebRTCManager | None = None
 
 # Valid resolution strings
 VALID_RESOLUTIONS = {"vga", "720p", "1080p", "2k"}
@@ -80,6 +90,30 @@ def init_frame_event(loop: asyncio.AbstractEventLoop) -> asyncio.Event:
     global frame_ready_event
     frame_ready_event = asyncio.Event()
     return frame_ready_event
+
+
+def init_webrtc() -> bool:
+    """Initialize WebRTC manager if aiortc is available. Returns True if enabled."""
+    global webrtc_manager
+    if not HAS_WEBRTC:
+        logger.warning("aiortc not installed — WebRTC disabled (WS JPEG only)")
+        return False
+
+    def frame_getter():
+        cap = camera_capture
+        if cap is None:
+            return None
+        return cap.latest_frame
+
+    webrtc_manager = WebRTCManager(frame_getter)
+
+    def on_state(ws_id, active):
+        # Per-client state is managed inside websocket_stream via state dict
+        pass
+
+    webrtc_manager.on_connection_state = on_state
+    logger.info("WebRTC manager initialized (H.264 preferred)")
+    return True
 
 
 def _robot_state_msg(th) -> dict:
@@ -151,6 +185,8 @@ async def _telemetry_loop(ws, state):
                 'resolution': current_resolution,
                 'available': camera_capture is not None,
             }
+            msg['transport'] = 'webrtc' if state.get('webrtc_active') else 'ws_jpeg'
+            msg['webrtc_available'] = webrtc_manager is not None
 
             # Add control loop telemetry and robot state if available
             th = telehead_ref
@@ -200,6 +236,11 @@ async def _frame_send_loop(ws, state):
 
     try:
         while not ws.closed:
+            # Skip JPEG frames when WebRTC is actively streaming
+            if state.get('webrtc_active'):
+                await asyncio.sleep(0.5)
+                continue
+
             # Use shared event (survives capture swaps) or poll
             evt = frame_ready_event
             if evt is not None:
@@ -298,6 +339,8 @@ async def websocket_stream(request):
     async with connected_ws_lock:
         connected_ws.add(ws)
 
+    ws_id = id(ws)
+
     # Shared telemetry state
     state = {
         'frame_count': 0,
@@ -307,6 +350,7 @@ async def websocket_stream(request):
         'fps_out': 0.0,
         'rtt_ms': 0.0,
         'pending_pings': {},
+        'webrtc_active': False,
     }
 
     # Receive loop for head pose, settings, and pong responses
@@ -330,14 +374,19 @@ async def websocket_stream(request):
                             th = telehead_ref
                             if th is not None:
                                 if action == "calibrate":
-                                    loop = asyncio.get_event_loop()
-                                    result = await loop.run_in_executor(
-                                        None, th.calibrate_neutral)
-                                    try:
-                                        await ws.send_str(json.dumps(
-                                            _robot_state_msg(th)))
-                                    except Exception:
-                                        pass
+                                    # Run calibration in background so the
+                                    # receive loop keeps processing head poses
+                                    # during the ~2s home move.
+                                    async def _do_calibrate(th, ws):
+                                        loop = asyncio.get_event_loop()
+                                        await loop.run_in_executor(
+                                            None, th.calibrate_neutral)
+                                        try:
+                                            await ws.send_str(json.dumps(
+                                                _robot_state_msg(th)))
+                                        except Exception:
+                                            pass
+                                    asyncio.ensure_future(_do_calibrate(th, ws))
                                 elif action == "toggle_position":
                                     th.position_tracking = not th.position_tracking
                                     try:
@@ -383,6 +432,29 @@ async def websocket_stream(request):
                                     state['rtt_ms'] += alpha * (rtt - state['rtt_ms'])
                         elif msg_type == "settings_sync":
                             await broadcast(msg.data, exclude=ws)
+                        elif msg_type == "webrtc_offer" and webrtc_manager is not None:
+                            try:
+                                answer = await webrtc_manager.handle_offer(
+                                    ws_id, data["sdp"], data.get("sdp_type", "offer"))
+                                # Don't set webrtc_active here — wait for
+                                # client to confirm via webrtc_status message
+                                await ws.send_str(json.dumps({
+                                    'type': 'webrtc_answer',
+                                    'sdp': answer['sdp'],
+                                    'sdp_type': answer['type'],
+                                }))
+                            except Exception as e:
+                                logger.warning(f"WebRTC offer handling failed: {e}")
+                        elif msg_type == "webrtc_status":
+                            state['webrtc_active'] = data.get('active', False)
+                            logger.info(f"Client WebRTC status: "
+                                        f"{'active' if state['webrtc_active'] else 'inactive'}")
+                        elif msg_type == "webrtc_candidate" and webrtc_manager is not None:
+                            try:
+                                await webrtc_manager.handle_candidate(
+                                    ws_id, data.get("candidate", {}))
+                            except Exception as e:
+                                logger.warning(f"WebRTC candidate failed: {e}")
                     except (json.JSONDecodeError, KeyError):
                         pass
                 elif msg.type == web.WSMsgType.ERROR:
@@ -410,6 +482,9 @@ async def websocket_stream(request):
             t.cancel()
         # Wait for cancellation to propagate
         await asyncio.gather(*tasks, return_exceptions=True)
+        # Close WebRTC peer if active
+        if webrtc_manager is not None:
+            await webrtc_manager.close_peer(ws_id)
         async with connected_ws_lock:
             connected_ws.discard(ws)
 

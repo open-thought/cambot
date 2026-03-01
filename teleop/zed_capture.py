@@ -50,6 +50,7 @@ class ZedMiniCapture:
 
         # Thread-safe latest frame
         self._latest_jpeg: bytes | None = None
+        self._latest_frame: np.ndarray | None = None
         self._latest_capture_ts: float = 0.0
         self._frame_lock = threading.Lock()
         self._opened = False
@@ -115,8 +116,10 @@ class ZedMiniCapture:
             jpeg = self.grab_stereo_jpeg()
             if jpeg is not None:
                 ts = time.monotonic()
+                raw_frame = self._stereo_buffer.copy()
                 with self._frame_lock:
                     self._latest_jpeg = jpeg
+                    self._latest_frame = raw_frame
                     self._latest_capture_ts = ts
                 # Wake async consumers waiting on frame_event
                 if self._loop is not None and self._frame_event is not None:
@@ -159,6 +162,12 @@ class ZedMiniCapture:
             return self._latest_jpeg
 
     @property
+    def latest_frame(self) -> np.ndarray | None:
+        """Get the latest raw BGR numpy frame (thread-safe)."""
+        with self._frame_lock:
+            return self._latest_frame
+
+    @property
     def latest_capture_ts(self) -> float:
         """Get the timestamp of the latest captured frame (thread-safe)."""
         with self._frame_lock:
@@ -188,6 +197,7 @@ class FallbackCapture:
         self._height = height
         self._fps = fps
         self._latest_jpeg: bytes | None = None
+        self._latest_frame: np.ndarray | None = None
         self._latest_capture_ts: float = 0.0
         self._frame_lock = threading.Lock()
         self._opened = False
@@ -222,8 +232,8 @@ class FallbackCapture:
         self._opened = True
         return True
 
-    def _generate_test_frame(self) -> bytes:
-        """Generate a side-by-side test pattern."""
+    def _generate_test_frame(self) -> tuple[bytes, np.ndarray]:
+        """Generate a side-by-side test pattern. Returns (jpeg_bytes, raw_bgr_frame)."""
         h, w = self._height, self._width
         frame = np.zeros((h, w * 2, 3), dtype=np.uint8)
         # Left eye: cyan
@@ -236,7 +246,7 @@ class FallbackCapture:
         ts = time.strftime("%H:%M:%S")
         cv2.putText(frame, ts, (w - 150, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
         _, jpeg = cv2.imencode('.jpg', frame, self._encode_params)
-        return jpeg.tobytes()
+        return jpeg.tobytes(), frame
 
     def capture_loop(self) -> None:
         """Continuous capture loop."""
@@ -250,13 +260,16 @@ class FallbackCapture:
                         w = frame.shape[1]
                         buf[:, :w] = frame
                         buf[:, w:] = frame
+                        raw_frame = buf.copy()
                         _, jpeg = cv2.imencode('.jpg', buf, self._encode_params)
                     else:
                         stereo = np.hstack([frame, frame])
+                        raw_frame = stereo.copy()
                         _, jpeg = cv2.imencode('.jpg', stereo, self._encode_params)
                     ts = time.monotonic()
                     with self._frame_lock:
                         self._latest_jpeg = jpeg.tobytes()
+                        self._latest_frame = raw_frame
                         self._latest_capture_ts = ts
                     if self._loop is not None and self._frame_event is not None:
                         try:
@@ -265,10 +278,11 @@ class FallbackCapture:
                             pass  # event loop closed during shutdown
                 continue
             else:
-                jpeg = self._generate_test_frame()
+                jpeg, raw_frame = self._generate_test_frame()
                 ts = time.monotonic()
                 with self._frame_lock:
                     self._latest_jpeg = jpeg
+                    self._latest_frame = raw_frame
                     self._latest_capture_ts = ts
                 if self._loop is not None and self._frame_event is not None:
                     try:
@@ -305,6 +319,12 @@ class FallbackCapture:
     def latest_jpeg(self) -> bytes | None:
         with self._frame_lock:
             return self._latest_jpeg
+
+    @property
+    def latest_frame(self) -> np.ndarray | None:
+        """Get the latest raw BGR numpy frame (thread-safe)."""
+        with self._frame_lock:
+            return self._latest_frame
 
     @property
     def latest_capture_ts(self) -> float:
@@ -364,7 +384,7 @@ if __name__ == "__main__":
         # Use capture loop briefly
         cap._opened = True
         cap.capture_loop.__func__  # just get one frame
-        jpeg = cap._generate_test_frame()
+        jpeg, _ = cap._generate_test_frame()
 
     if jpeg:
         with open(args.output, "wb") as f:

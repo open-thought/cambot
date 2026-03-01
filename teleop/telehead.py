@@ -201,34 +201,58 @@ class TeleHead:
         return True
 
     def calibrate_neutral(self):
-        """Move to home position, then capture VR head pose as neutral reference."""
+        """Move to home position, then capture VR head pose as neutral reference.
+
+        Sequence:
+        1. Pause control loop (_moving_to_position flag)
+        2. Move robot to home position (blocks ~2s)
+        3. Resync IK home to match actual servo positions
+        4. Wait for a fresh VR pose to arrive
+        5. Capture that pose as the neutral VR reference
+        6. Resume control loop
+        """
         with self._lock:
             pose = self._latest_pose
         if pose is None:
             logger.warning("No head pose data yet.")
             return False
 
-        # Move to home position before capturing neutral
-        if self._move_to_named_position(self.home_path, "home"):
-            # Resync smoothed angles to match the home position
-            if self.servo and self.ik:
-                raw_home = load_home_position(self.home_path)
-                if raw_home:
-                    self._smoothed_q = self.servo.raw_to_relative(raw_home)
-                    self.ik.set_home(self._smoothed_q)
+        # Pause the control loop for the ENTIRE calibration sequence.
+        # Without this, the control loop resumes between the home move and
+        # neutral capture, processing poses with a stale/mismatched neutral
+        # and causing a servo jump.
+        self._moving_to_position = True
+        try:
+            # Move to home position (servo.move_to_raw_position blocks ~2s)
+            if self.servo and self.servo.is_connected and self.home_path and os.path.exists(self.home_path):
+                raw = load_home_position(self.home_path)
+                if raw:
+                    current = self.servo.read_raw_positions()
+                    logger.info(f"Calibration: moving to home (2s): target={raw}, current={current}")
+                    self.servo.move_to_raw_position(raw, duration=2.0)
+                    logger.info("Calibration: reached home position")
 
-        if self.ik:
-            # Re-read the LATEST VR pose (operator may have moved during home move)
-            with self._lock:
-                pose = self._latest_pose
-            if pose is None:
-                logger.warning("Lost head pose during home move.")
-                return False
-            q = pose.get("q", {})
-            p = pose.get("p", {"x": 0, "y": 0, "z": 0})
-            self.ik.calibrate_neutral_vr(q, p)
+                    # Resync smoothed angles and IK home
+                    if self.ik:
+                        self._smoothed_q = self.servo.raw_to_relative(raw)
+                        self.ik.set_home(self._smoothed_q)
 
-        logger.info("Neutral head pose captured.")
+            if self.ik:
+                # Wait for a fresh VR pose after the move completes.
+                self._pose_event.clear()
+                self._pose_event.wait(timeout=1.0)
+                with self._lock:
+                    pose = self._latest_pose
+                if pose is None:
+                    logger.warning("Lost head pose during calibration.")
+                    return False
+                q = pose.get("q", {})
+                p = pose.get("p", {"x": 0, "y": 0, "z": 0})
+                self.ik.calibrate_neutral_vr(q, p)
+
+            logger.info("Neutral head pose captured.")
+        finally:
+            self._moving_to_position = False
         return True
 
     def on_head_pose(self, pose: dict):
@@ -509,6 +533,8 @@ def main():
                         help="Camera FPS (default: auto based on resolution)")
     parser.add_argument("--jpeg-quality", type=int, default=85,
                         help="JPEG encoding quality 1-100 (default: 85)")
+    parser.add_argument("--no-webrtc", action="store_true",
+                        help="Disable WebRTC video (use WebSocket JPEG only)")
     parser.add_argument("--server-port", type=int, default=8080, help="HTTPS server port")
     parser.add_argument("--save-home", action="store_true",
                         help="Save current position as home and exit")
@@ -589,6 +615,13 @@ def main():
         )
 
     teleop_server.on_head_pose(debug_print)
+
+    # --- WebRTC setup ---
+    webrtc_enabled = False
+    if not args.no_webrtc:
+        webrtc_enabled = teleop_server.init_webrtc()
+    else:
+        logger.info("WebRTC disabled (--no-webrtc)")
 
     # --- Camera setup ---
     if not args.no_camera:
@@ -677,6 +710,8 @@ def main():
         cam_type = 'ZED Mini' if cfg['use_zed'] else 'fallback'
         cam_info = f"{cam_type} {cfg['resolution']}@{cfg['fps']}fps q{cfg['quality']}"
     print(f"  Camera: {cam_info}")
+    webrtc_label = 'enabled (H.264)' if webrtc_enabled else 'disabled (WS JPEG only)'
+    print(f"  WebRTC: {webrtc_label}")
     print(f"  IK: {'active' if telehead.ik else 'disabled'}")
     print()
     print("  Open the URL on Quest 3, enter VR, then:")

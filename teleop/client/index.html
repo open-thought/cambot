@@ -68,6 +68,7 @@
         <div>Resolution: <span id="resolution">-</span></div>
         <div>Frame size: <span id="framesize">-</span></div>
         <div>RTT: <span id="rtt">-</span></div>
+        <div>Transport: <span id="transport">WS-JPEG</span></div>
         <div>Server: <span id="server-stats">-</span></div>
         <div>Debug: <span id="debug">init</span></div>
     </div>
@@ -163,6 +164,7 @@
     const resEl = document.getElementById('resolution');
     const fsEl = document.getElementById('framesize');
     const rttEl = document.getElementById('rtt');
+    const transportEl = document.getElementById('transport');
     const serverStatsEl = document.getElementById('server-stats');
     const debugEl = document.getElementById('debug');
 
@@ -181,6 +183,20 @@
     const RESOLUTIONS = ['vga', '720p', '1080p', '2k'];
     let currentResolution = '720p';
     let resolutionSwitching = false;
+
+    // --- WebRTC state ---
+    let pc = null;
+    let webrtcActive = false;
+    let webrtcAvailable = false;  // set by server telemetry
+    let webrtcVideoEl = null;
+    let webrtcTimeout = null;
+    let webrtcStatsTimer = null;
+    const WEBRTC_TIMEOUT_MS = 4000;  // fallback if no video frames arrive
+
+    // WebRTC stats (updated by periodic getStats polling)
+    const webrtcStats = { bps: 0, fps: 0, codec: '' };
+    let _prevBytes = 0;
+    let _prevStatsTime = 0;
 
     // --- Settings ---
     const DEFAULTS = { dist: 2.5, fov: 90, screenY: -0.35, hudY: -0.25, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
@@ -296,6 +312,185 @@
         ws.send(JSON.stringify({ type: 'command', action, ...extra }));
     }
 
+    // --- WebRTC ---
+    function createVideoElement() {
+        if (webrtcVideoEl) return webrtcVideoEl;
+        webrtcVideoEl = document.createElement('video');
+        webrtcVideoEl.autoplay = true;
+        webrtcVideoEl.playsInline = true;
+        webrtcVideoEl.muted = true;
+        // Keep technically visible (1x1px) so browser doesn't pause decoding
+        webrtcVideoEl.style.position = 'fixed';
+        webrtcVideoEl.style.width = '1px';
+        webrtcVideoEl.style.height = '1px';
+        webrtcVideoEl.style.opacity = '0.01';
+        webrtcVideoEl.style.pointerEvents = 'none';
+        webrtcVideoEl.style.zIndex = '-1';
+        document.body.appendChild(webrtcVideoEl);
+        return webrtcVideoEl;
+    }
+
+    async function pollWebRTCStats() {
+        if (!pc || !webrtcActive) return;
+        try {
+            const stats = await pc.getStats();
+            stats.forEach(report => {
+                if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                    const now = performance.now();
+                    const bytes = report.bytesReceived || 0;
+                    if (_prevStatsTime > 0) {
+                        const dt = (now - _prevStatsTime) / 1000;
+                        if (dt > 0) {
+                            webrtcStats.bps = ((bytes - _prevBytes) * 8) / dt;
+                        }
+                    }
+                    _prevBytes = bytes;
+                    _prevStatsTime = now;
+                    if (report.framesPerSecond) {
+                        webrtcStats.fps = report.framesPerSecond;
+                    }
+                }
+                if (report.type === 'codec' && report.mimeType && report.mimeType.startsWith('video/')) {
+                    webrtcStats.codec = report.mimeType.replace('video/', '');
+                }
+            });
+            // Update overlay
+            const mbps = (webrtcStats.bps / 1_000_000).toFixed(1);
+            const codec = webrtcStats.codec ? ` ${webrtcStats.codec}` : '';
+            transportEl.textContent = `WebRTC${codec} ${mbps} Mbps ${webrtcStats.fps}fps`;
+            // Use decoded FPS for the FPS counter when available
+            if (webrtcStats.fps > 0) {
+                fpsEl.textContent = webrtcStats.fps;
+            }
+            hudDirty = true;
+        } catch(e) {}
+    }
+
+    function startStatsPolling() {
+        stopStatsPolling();
+        _prevBytes = 0;
+        _prevStatsTime = 0;
+        webrtcStats.bps = 0;
+        webrtcStats.fps = 0;
+        webrtcStats.codec = '';
+        webrtcStatsTimer = setInterval(pollWebRTCStats, 1000);
+    }
+
+    function stopStatsPolling() {
+        if (webrtcStatsTimer) {
+            clearInterval(webrtcStatsTimer);
+            webrtcStatsTimer = null;
+        }
+    }
+
+    function activateWebRTCTexture() {
+        if (webrtcActive) return;
+        const video = webrtcVideoEl;
+        if (!video || video.videoWidth === 0) return;
+
+        // Resize canvas to match WebRTC video dimensions
+        if (drawCanvas.width !== video.videoWidth || drawCanvas.height !== video.videoHeight) {
+            drawCanvas.width = video.videoWidth;
+            drawCanvas.height = video.videoHeight;
+            SBS_WIDTH = video.videoWidth;
+            uniforms.texSize.value.set(video.videoWidth, video.videoHeight);
+            applySettings();
+        }
+
+        webrtcActive = true;
+        hudDirty = true;
+        transportEl.textContent = 'WebRTC';
+        console.log('WebRTC active:', video.videoWidth, 'x', video.videoHeight);
+        resEl.textContent = `${video.videoWidth}x${video.videoHeight} (WebRTC)`;
+        startStatsPolling();
+        // Tell server to stop sending JPEG frames
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'webrtc_status', active: true }));
+        }
+    }
+
+    function deactivateWebRTC() {
+        if (!webrtcActive && !pc) return;
+        webrtcActive = false;
+        clearTimeout(webrtcTimeout);
+        stopStatsPolling();
+
+        if (pc) {
+            pc.close();
+            pc = null;
+        }
+        hudDirty = true;
+        transportEl.textContent = 'WS-JPEG';
+        // Tell server to resume sending JPEG frames
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'webrtc_status', active: false }));
+        }
+        console.log('WebRTC deactivated, falling back to WS JPEG');
+    }
+
+    async function startWebRTC() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (pc) deactivateWebRTC();
+
+        const video = createVideoElement();
+
+        pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        });
+
+        // Receive-only video
+        pc.addTransceiver('video', { direction: 'recvonly' });
+
+        pc.ontrack = (ev) => {
+            console.log('WebRTC track received:', ev.track.kind);
+            video.srcObject = ev.streams[0];
+            video.play().catch(() => {});
+
+            // Wait for video to produce frames, then activate
+            video.onloadeddata = () => {
+                clearTimeout(webrtcTimeout);
+                activateWebRTCTexture();
+            };
+        };
+
+        pc.onicecandidate = (ev) => {
+            if (ev.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'webrtc_candidate',
+                    candidate: {
+                        candidate: ev.candidate.candidate,
+                        sdpMid: ev.candidate.sdpMid,
+                        sdpMLineIndex: ev.candidate.sdpMLineIndex,
+                    },
+                }));
+            }
+        };
+
+        pc.onconnectionstatechange = () => {
+            console.log('WebRTC connection state:', pc.connectionState);
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                deactivateWebRTC();
+            }
+        };
+
+        // Create offer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({
+            type: 'webrtc_offer',
+            sdp: offer.sdp,
+            sdp_type: offer.type,
+        }));
+
+        // Timeout: if no video within WEBRTC_TIMEOUT_MS, stay on JPEG
+        webrtcTimeout = setTimeout(() => {
+            if (!webrtcActive) {
+                console.log('WebRTC timeout — staying on WS JPEG');
+                deactivateWebRTC();
+            }
+        }, WEBRTC_TIMEOUT_MS);
+    }
+
     function updateRobotUI() {
         calibrateBtn.disabled = robotState.calibrating;
         calibrateBtn.textContent = robotState.calibrating ? 'Calibrating...'
@@ -352,15 +547,39 @@
             resolutionSwitching = true;
             updateResolutionUI(data.resolution);
             hudDirty = true;
+            // Tear down WebRTC now — encoder can't handle dimension changes
+            if (webrtcActive || pc) {
+                deactivateWebRTC();
+            }
         } else if (data.type === 'resolution_changed') {
             resolutionSwitching = false;
             if (!data.error) currentResolution = data.resolution;
             updateResolutionUI();
             hudDirty = true;
+            // Re-establish WebRTC with new frame dimensions
+            if (webrtcAvailable && !pc) {
+                setTimeout(() => startWebRTC(), 500);
+            }
+        } else if (data.type === 'webrtc_answer') {
+            // Apply WebRTC answer SDP
+            if (pc) {
+                pc.setRemoteDescription(new RTCSessionDescription({
+                    sdp: data.sdp,
+                    type: data.sdp_type || 'answer',
+                })).catch(e => {
+                    console.error('Failed to set WebRTC answer:', e);
+                    deactivateWebRTC();
+                });
+            }
+        } else if (data.type === 'webrtc_candidate') {
+            if (pc) {
+                pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+            }
         } else if (data.type === 'telemetry') {
             rttEl.textContent = data.rtt_ms > 0 ? `${data.rtt_ms.toFixed(0)}ms` : '-';
             const f = data.frame || {};
-            let stats = `${f.fps_out || 0}fps drop=${f.drops || 0} send=${f.avg_send_ms || 0}ms budget=${f.budget_ms || 0}ms`;
+            let transport = data.transport === 'webrtc' ? ' [WebRTC]' : '';
+            let stats = `${f.fps_out || 0}fps drop=${f.drops || 0} send=${f.avg_send_ms || 0}ms budget=${f.budget_ms || 0}ms${transport}`;
             if (data.pose) {
                 const p = data.pose;
                 stats += ` | IK=${p.ik_ms}ms servo=${p.servo_ms}ms ${p.control_hz}Hz`;
@@ -376,6 +595,12 @@
             if (data.camera && !resolutionSwitching) {
                 currentResolution = data.camera.resolution;
                 updateResolutionUI();
+            }
+            // Detect WebRTC availability from server and auto-start
+            if (data.webrtc_available && !webrtcAvailable && !pc) {
+                webrtcAvailable = true;
+                console.log('Server supports WebRTC — initiating');
+                startWebRTC();
             }
         }
     }
@@ -617,8 +842,22 @@
 
         ctx.fillStyle = '#fff';
         ctx.fillText(fpsEl.textContent + 'fps', x, y1);
+        x += 120;
 
-        // Line 2: Controller hints
+        ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 30;
+
+        // Transport mode + bandwidth
+        if (webrtcActive) {
+            const mbps = (webrtcStats.bps / 1_000_000).toFixed(1);
+            const codec = webrtcStats.codec || 'WebRTC';
+            ctx.fillStyle = '#4caf50';
+            ctx.fillText(`${codec} ${mbps}Mbps`, x, y1);
+        } else {
+            ctx.fillStyle = '#ffa726';
+            ctx.fillText('WS-JPEG', x, y1);
+        }
+
+        // Line 2: Stats + controller hints
         ctx.font = '24px monospace';
         ctx.fillStyle = '#aaa';
         ctx.fillText('[A/X] Calibrate  [B/Y] Position  [R3] Resolution', 24, y2);
@@ -747,7 +986,20 @@
     let renderCount = 0;
 
     renderer.setAnimationLoop(() => {
-        if (textureReady) {
+        // WebRTC: draw video frame to the same canvas used by JPEG
+        if (webrtcActive && webrtcVideoEl && webrtcVideoEl.readyState >= webrtcVideoEl.HAVE_CURRENT_DATA) {
+            const vw = webrtcVideoEl.videoWidth, vh = webrtcVideoEl.videoHeight;
+            if (vw > 0 && (drawCanvas.width !== vw || drawCanvas.height !== vh)) {
+                drawCanvas.width = vw;
+                drawCanvas.height = vh;
+                SBS_WIDTH = vw;
+                uniforms.texSize.value.set(vw, vh);
+                applySettings();
+                resEl.textContent = `${vw}x${vh} (WebRTC)`;
+            }
+            drawCtx.drawImage(webrtcVideoEl, 0, 0);
+            texture.needsUpdate = true;
+        } else if (textureReady) {
             texture.needsUpdate = true;
             textureReady = false;
         }
@@ -775,6 +1027,17 @@
         }
 
         renderer.render(scene, camera);
+
+        // FPS counting for WebRTC (ws.onmessage binary path is skipped)
+        if (webrtcActive) {
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFpsTime >= 1000) {
+                fpsEl.textContent = frameCount;
+                frameCount = 0;
+                lastFpsTime = now;
+            }
+        }
 
         renderCount++;
         if (renderCount % 300 === 0) {
@@ -875,6 +1138,9 @@
                 return;
             }
 
+            // Skip JPEG processing when WebRTC is streaming video
+            if (webrtcActive) return;
+
             // Check for frame header (magic 0x5342 'SB')
             const buf = event.data;
             let jpegData = buf;
@@ -904,6 +1170,8 @@
         ws.onclose = (e) => {
             console.log('WebSocket closed:', e.code, e.reason);
             ws = null;
+            deactivateWebRTC();
+            webrtcAvailable = false;
             if (autoReconnect) {
                 reconnectAttempts++;
                 const msg = `ws closed (${e.code}), retry #${reconnectAttempts} in ${RECONNECT_DELAY/1000}s`;
@@ -932,6 +1200,8 @@
         autoReconnect = false;
         reconnectAttempts = 0;
         clearTimeout(reconnectTimer);
+        deactivateWebRTC();
+        webrtcAvailable = false;
         if (ws) { ws.close(); ws = null; }
         updateStatus('disconnected', 'Disconnected');
         startBtn.disabled = false;
