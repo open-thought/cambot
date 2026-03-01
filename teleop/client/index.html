@@ -56,6 +56,10 @@
         .setting-group-title { font-size: 12px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
         #resetBtn { background: #c62828; padding: 8px 16px; font-size: 13px; width: 100%; margin-top: 4px; }
         #resetBtn:hover { background: #e53935; }
+        #calibrateBtn { background: #ff9800; }
+        #calibrateBtn:hover { background: #f57c00; }
+        #positionBtn { background: #444; }
+        #positionBtn:hover { background: #666; }
     </style>
 </head>
 <body>
@@ -63,6 +67,8 @@
         <div>FPS: <span id="fps">0</span></div>
         <div>Resolution: <span id="resolution">-</span></div>
         <div>Frame size: <span id="framesize">-</span></div>
+        <div>RTT: <span id="rtt">-</span></div>
+        <div>Server: <span id="server-stats">-</span></div>
         <div>Debug: <span id="debug">init</span></div>
     </div>
 
@@ -117,6 +123,8 @@
     <div id="controls">
         <button id="startBtn">Start Stream</button>
         <button id="stopBtn" disabled>Stop</button>
+        <button id="calibrateBtn" disabled>Calibrate</button>
+        <button id="positionBtn" disabled>Position: OFF</button>
         <button id="settingsBtn">Settings</button>
         <span id="status" class="disconnected">Disconnected</span>
     </div>
@@ -136,11 +144,20 @@
     const fpsEl = document.getElementById('fps');
     const resEl = document.getElementById('resolution');
     const fsEl = document.getElementById('framesize');
+    const rttEl = document.getElementById('rtt');
+    const serverStatsEl = document.getElementById('server-stats');
     const debugEl = document.getElementById('debug');
+
+    const calibrateBtn = document.getElementById('calibrateBtn');
+    const positionBtn = document.getElementById('positionBtn');
 
     let ws = null;
     let frameCount = 0;
     let lastFpsTime = performance.now();
+
+    // Robot state from server
+    const robotState = { calibrated: false, position_tracking: false, calibrating: false };
+    let hudDirty = true;
 
     // --- Settings ---
     const DEFAULTS = { dist: 3.5, size: 6.0, conv: 0, valign: 0, swap: false, sharp: 1.3, bright: 10, contrast: 0 };
@@ -233,6 +250,20 @@
         applySettings();
     });
 
+    function sendCommand(action) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'command', action }));
+    }
+
+    function updateRobotUI() {
+        calibrateBtn.disabled = robotState.calibrating;
+        calibrateBtn.textContent = robotState.calibrating ? 'Calibrating...'
+            : robotState.calibrated ? 'Recalibrate' : 'Calibrate';
+        positionBtn.textContent = `Position: ${robotState.position_tracking ? 'ON' : 'OFF'}`;
+        positionBtn.style.background = robotState.position_tracking ? '#1a73e8' : '#444';
+        hudDirty = true;
+    }
+
     function handleServerMessage(data) {
         if (data.type === 'settings_sync') {
             syncEnabled = false;
@@ -240,6 +271,35 @@
             syncUI();
             applySettings();
             syncEnabled = true;
+        } else if (data.type === 'robot_state') {
+            robotState.calibrated = data.calibrated;
+            robotState.position_tracking = data.position_tracking;
+            robotState.calibrating = false;
+            updateRobotUI();
+        } else if (data.type === 'ping') {
+            // Echo pong immediately with same server_ts and seq
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'pong',
+                    server_ts: data.server_ts,
+                    seq: data.seq,
+                }));
+            }
+        } else if (data.type === 'telemetry') {
+            rttEl.textContent = data.rtt_ms > 0 ? `${data.rtt_ms.toFixed(0)}ms` : '-';
+            const f = data.frame || {};
+            let stats = `${f.fps_out || 0}fps drop=${f.drops || 0} send=${f.avg_send_ms || 0}ms budget=${f.budget_ms || 0}ms`;
+            if (data.pose) {
+                const p = data.pose;
+                stats += ` | IK=${p.ik_ms}ms servo=${p.servo_ms}ms ${p.control_hz}Hz`;
+            }
+            serverStatsEl.textContent = stats;
+            // Sync robot state from telemetry too (keeps VR HUD in sync)
+            if (data.robot) {
+                robotState.calibrated = data.robot.calibrated;
+                robotState.position_tracking = data.robot.position_tracking;
+                if (!robotState.calibrating) updateRobotUI();
+            }
         }
     }
 
@@ -383,6 +443,127 @@
         mesh.geometry.attributes.uv.needsUpdate = true;
     }
 
+    // --- VR HUD (head-locked status bar, visible in VR only) ---
+    const hudCanvas = document.createElement('canvas');
+    hudCanvas.width = 1024;
+    hudCanvas.height = 128;
+    const hudCtx = hudCanvas.getContext('2d');
+
+    const hudTexture = new THREE.CanvasTexture(hudCanvas);
+    hudTexture.minFilter = THREE.LinearFilter;
+    hudTexture.generateMipmaps = false;
+
+    const hudMaterial = new THREE.MeshBasicMaterial({
+        map: hudTexture, transparent: true, depthTest: false, depthWrite: false,
+    });
+    const hudMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hudMaterial);
+    hudMesh.frustumCulled = false;
+    hudMesh.renderOrder = 2;
+    hudMesh.layers.enable(0);
+    hudMesh.layers.enable(1);
+    hudMesh.layers.enable(2);
+    hudMesh.visible = false;
+    scene.add(hudMesh);
+
+    let lastHudUpdate = 0;
+
+    function drawHUD() {
+        const ctx = hudCtx;
+        const w = hudCanvas.width, h = hudCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        // Background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.beginPath();
+        ctx.roundRect(0, 0, w, h, 12);
+        ctx.fill();
+
+        ctx.textBaseline = 'middle';
+        const y1 = h * 0.33, y2 = h * 0.72;
+
+        // Line 1: Status
+        ctx.font = 'bold 30px monospace';
+        let x = 24;
+
+        // Calibration
+        if (robotState.calibrating) {
+            ctx.fillStyle = '#ffa726';
+            ctx.fillText('CALIBRATING...', x, y1);
+        } else if (robotState.calibrated) {
+            ctx.fillStyle = '#4caf50';
+            ctx.fillText('CALIBRATED', x, y1);
+        } else {
+            ctx.fillStyle = '#ff5722';
+            ctx.fillText('UNCALIBRATED', x, y1);
+        }
+        x += 300;
+
+        ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 30;
+
+        // Position mode
+        if (robotState.position_tracking) {
+            ctx.fillStyle = '#00bcd4';
+            ctx.fillText('POS:ON', x, y1);
+        } else {
+            ctx.fillStyle = '#888';
+            ctx.fillText('POS:OFF', x, y1);
+        }
+        x += 180;
+
+        ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 30;
+
+        // RTT
+        ctx.fillStyle = '#fff';
+        ctx.fillText('RTT:' + rttEl.textContent, x, y1);
+        x += 200;
+
+        ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 30;
+
+        ctx.fillStyle = '#fff';
+        ctx.fillText(fpsEl.textContent + 'fps', x, y1);
+
+        // Line 2: Controller hints
+        ctx.font = '24px monospace';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('[A/X] Calibrate      [B/Y] Toggle Position', 24, y2);
+
+        hudTexture.needsUpdate = true;
+    }
+
+    // --- Controller button detection ---
+    const prevButtons = {};
+
+    function checkControllerButtons() {
+        const session = renderer.xr.getSession();
+        if (!session) return;
+
+        for (const source of session.inputSources) {
+            if (!source.gamepad) continue;
+            const btns = source.gamepad.buttons;
+            if (btns.length < 6) continue;
+            const hand = source.handedness || 'none';
+
+            // A/X button (index 4) = Calibrate
+            const pk = hand + '_4';
+            const primaryPressed = btns[4].pressed;
+            if (primaryPressed && !prevButtons[pk] && !robotState.calibrating) {
+                robotState.calibrating = true;
+                hudDirty = true;
+                updateRobotUI();
+                sendCommand('calibrate');
+            }
+            prevButtons[pk] = primaryPressed;
+
+            // B/Y button (index 5) = Toggle Position
+            const sk = hand + '_5';
+            const secondaryPressed = btns[5].pressed;
+            if (secondaryPressed && !prevButtons[sk]) {
+                sendCommand('toggle_position');
+            }
+            prevButtons[sk] = secondaryPressed;
+        }
+    }
+
     function applySettings() {
         const w = settings.size;
         const h = w / EYE_ASPECT;
@@ -404,6 +585,12 @@
         uniforms.uSharpen.value = settings.sharp;
         uniforms.uBrightness.value = settings.bright / 100;
         uniforms.uContrast.value = 1.0 + settings.contrast / 50;
+
+        // Position VR HUD below video
+        const hudW = w * 0.42;
+        const hudH = hudW * (hudCanvas.height / hudCanvas.width);
+        hudMesh.scale.set(hudW, hudH, 1);
+        hudMesh.userData.offset = new THREE.Vector3(0, -0.35 - h / 2 - hudH / 2 - 0.06, -settings.dist);
 
         if (syncEnabled && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'settings_sync', settings }));
@@ -463,6 +650,19 @@
 
         if (renderer.xr.isPresenting) {
             sendHeadPose(xrCam);
+            checkControllerButtons();
+            lockToHead(hudMesh, xrCam);
+            hudMesh.visible = true;
+
+            // Redraw HUD every 500ms or when state changed
+            const now = performance.now();
+            if (hudDirty || now - lastHudUpdate > 500) {
+                drawHUD();
+                hudDirty = false;
+                lastHudUpdate = now;
+            }
+        } else {
+            hudMesh.visible = false;
         }
 
         renderer.render(scene, camera);
@@ -555,6 +755,8 @@
             reconnectAttempts = 0;
             updateStatus('connected', 'Connected');
             stopBtn.disabled = false;
+            calibrateBtn.disabled = false;
+            positionBtn.disabled = false;
             debugEl.textContent = 'ws open';
         };
 
@@ -564,11 +766,24 @@
                 return;
             }
 
-            latestFrameData = event.data;
+            // Check for frame header (magic 0x5342 'SB')
+            const buf = event.data;
+            let jpegData = buf;
+            if (buf.byteLength > 16) {
+                const view = new DataView(buf);
+                const magic = view.getUint16(0, true);
+                if (magic === 0x5342) {
+                    const headerLen = view.getUint16(2, true);
+                    // Extract JPEG from after header (avoid copy via Blob slice)
+                    jpegData = new Uint8Array(buf, headerLen);
+                }
+            }
+
+            latestFrameData = jpegData;
             processLatestFrame();
 
             frameCount++;
-            fsEl.textContent = `${(event.data.byteLength / 1024).toFixed(0)} KB`;
+            fsEl.textContent = `${(buf.byteLength / 1024).toFixed(0)} KB`;
             const now = performance.now();
             if (now - lastFpsTime >= 1000) {
                 fpsEl.textContent = frameCount;
@@ -612,7 +827,19 @@
         updateStatus('disconnected', 'Disconnected');
         startBtn.disabled = false;
         stopBtn.disabled = true;
+        calibrateBtn.disabled = true;
+        positionBtn.disabled = true;
     }
+
+    calibrateBtn.addEventListener('click', () => {
+        if (robotState.calibrating) return;
+        robotState.calibrating = true;
+        updateRobotUI();
+        sendCommand('calibrate');
+    });
+    positionBtn.addEventListener('click', () => {
+        sendCommand('toggle_position');
+    });
 
     startBtn.addEventListener('click', () => startStream());
     stopBtn.addEventListener('click', () => stopStream());

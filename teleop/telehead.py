@@ -109,6 +109,7 @@ class TeleHead:
         self._latest_pose = None
         self._running = False
         self._moving_to_position = False
+        self.position_tracking = False  # toggled via 'p' key
 
         # Smoothed joint angles (radians)
         self._smoothed_q: dict[str, float] | None = None
@@ -116,6 +117,14 @@ class TeleHead:
         # IK failure tracking
         self._consecutive_failures = 0
         self._last_failure_log = 0.0
+
+        # Telemetry (updated by control loop, read by server)
+        self._telemetry = {
+            'ik_ms': 0.0,
+            'servo_ms': 0.0,
+            'control_hz': 0.0,
+            'ik_failures': 0,
+        }
 
     def connect(self):
         """Connect to the robot and set up IK."""
@@ -173,13 +182,16 @@ class TeleHead:
         if not raw:
             return False
 
-        logger.info(f"Moving to {label} position ({duration:.1f}s)...")
+        current = self.servo.read_raw_positions()
+        logger.info(f"Moving to {label} position ({duration:.1f}s): "
+                     f"target={raw}, current={current}")
         self._moving_to_position = True
         try:
             self.servo.move_to_raw_position(raw, duration=duration)
         finally:
             self._moving_to_position = False
-        logger.info(f"Reached {label} position")
+        actual = self.servo.read_raw_positions()
+        logger.info(f"Reached {label} position: actual={actual}")
         return True
 
     def calibrate_neutral(self):
@@ -220,6 +232,16 @@ class TeleHead:
             self._latest_pose = pose
         self._pose_event.set()
 
+    def get_telemetry(self) -> dict:
+        """Get a snapshot of control loop telemetry (thread-safe read of simple types)."""
+        t = self._telemetry.copy()
+        t['calibrated'] = (
+            self.ik is not None
+            and getattr(self.ik, '_vr_neutral_inv', None) is not None
+        )
+        t['position_tracking'] = self.position_tracking
+        return t
+
     def control_loop(self):
         """Main IK control loop. Event-driven with rate_hz ceiling."""
         from ik_solver import JOINT_NAMES
@@ -255,16 +277,21 @@ class TeleHead:
                 p_vr = pose.get("p", {"x": 0, "y": 0, "z": 0})
 
                 if q_vr is not None:
-                    # 1. Convert VR pose to robot target + IK solve
                     t0 = time.monotonic()
                     try:
-                        target = self.ik.vr_pose_to_target(q_vr, p_vr)
+                        if self.position_tracking:
+                            # Full IK: orientation + position (all 6 joints)
+                            target = self.ik.vr_pose_to_target(
+                                q_vr, p_vr, position_tracking=True)
+                            q_solved, success = self.ik.solve(target, self._smoothed_q)
+                        else:
+                            # Orientation only: direct wrist mapping (joints 4-6)
+                            q_solved, success = self.ik.solve_orientation(q_vr, p_vr)
                     except Exception as e:
-                        logger.warning(f"VR->target failed: {e}")
-                        target = None
+                        logger.warning(f"VR->joints failed: {e}")
+                        q_solved, success = None, False
 
-                    if target is not None:
-                        q_solved, success = self.ik.solve(target, self._smoothed_q)
+                    if q_solved is not None:
                         t_ik = time.monotonic() - t0
 
                         if success:
@@ -311,12 +338,22 @@ class TeleHead:
             now = time.monotonic()
             if _loop_count > 0 and now - _last_stats >= 5.0:
                 n = _loop_count
+                hz = n / (now - _last_stats)
+                ik_ms = _t_ik_sum / n * 1000
+                servo_ms = _t_servo_sum / n * 1000
                 logger.info(
-                    f"Control loop: {n / (now - _last_stats):.0f}Hz | "
-                    f"IK={_t_ik_sum / n * 1000:.1f}ms | "
-                    f"servo={_t_servo_sum / n * 1000:.1f}ms | "
+                    f"Control loop: {hz:.0f}Hz | "
+                    f"IK={ik_ms:.1f}ms | "
+                    f"servo={servo_ms:.1f}ms | "
                     f"total={_t_loop_sum / n * 1000:.1f}ms"
                 )
+                # Update telemetry for server to read
+                self._telemetry = {
+                    'ik_ms': ik_ms,
+                    'servo_ms': servo_ms,
+                    'control_hz': hz,
+                    'ik_failures': self._consecutive_failures,
+                }
                 _t_ik_sum = _t_servo_sum = _t_loop_sum = 0.0
                 _loop_count = 0
                 _last_stats = now
@@ -360,7 +397,7 @@ def main():
                         help="Max joint velocity (rad/s)")
     parser.add_argument("--position-scale", type=float, default=1.0,
                         help="Scale factor for VR head translation (default: 1.0)")
-    parser.add_argument("--resolution", default="720p", choices=["vga", "720p", "1080p"],
+    parser.add_argument("--resolution", default="720p", choices=["vga", "720p", "1080p", "2k"],
                         help="Camera resolution (default: 720p)")
     parser.add_argument("--camera-fps", type=int, default=None,
                         help="Camera FPS (default: auto based on resolution)")
@@ -409,6 +446,9 @@ def main():
     )
     telehead.connect()
 
+    # Wire telehead ref so server can read telemetry
+    teleop_server.telehead_ref = telehead
+
     # Register head pose callback
     teleop_server.on_head_pose(telehead.on_head_pose)
 
@@ -429,12 +469,12 @@ def main():
         ik_status = f"fail={telehead._consecutive_failures}" if telehead._consecutive_failures > 0 else "ok"
 
         if telehead.ik and telehead.ik._vr_neutral_inv is not None:
-            # Show position delta in robot frame (what IK actually receives)
+            pos_state = "ON" if telehead.position_tracking else "OFF"
             d = telehead.ik._last_p_delta_robot
-            delta_str = f"robot_delta=({d[0]:+.3f},{d[1]:+.3f},{d[2]:+.3f})m"
+            delta_str = f"pos={pos_state} delta=({d[0]:+.3f},{d[1]:+.3f},{d[2]:+.3f})m"
             cal = "CAL"
         else:
-            delta_str = "pos_transfer=OFF(press Enter)"
+            delta_str = "uncalibrated(press Enter)"
             cal = "RAW"
 
         logger.info(
@@ -451,13 +491,13 @@ def main():
         # Auto-select FPS based on resolution if not specified
         cam_fps = args.camera_fps
         if cam_fps is None:
-            cam_fps = {"vga": 100, "720p": 60, "1080p": 30}[args.resolution]
+            cam_fps = {"vga": 100, "720p": 60, "1080p": 30, "2k": 15}[args.resolution]
 
         use_zed = not args.no_zed
         if use_zed:
             cap = create_capture(use_zed=True, resolution=args.resolution, fps=cam_fps)
         else:
-            res_map = {"vga": (672, 376), "720p": (1280, 720), "1080p": (1920, 1080)}
+            res_map = {"vga": (672, 376), "720p": (1280, 720), "1080p": (1920, 1080), "2k": (2208, 1242)}
             w, h = res_map[args.resolution]
             cap = create_capture(use_zed=False, camera_index=0, width=w, height=h, fps=cam_fps)
 
@@ -481,7 +521,15 @@ def main():
     # --- Robot control loop ---
     if telehead.servo is not None:
         telehead.servo.set_torque(True)
-        telehead._move_to_named_position(resting_path, "resting")
+        telehead._move_to_named_position(home_path, "home")
+        # Re-read actual position and update IK home to match where the
+        # robot physically settled (servos may not reach exact target under load)
+        if telehead.ik:
+            actual_home = telehead.servo.read_joint_angles()
+            telehead.ik.set_home(actual_home)
+            telehead._smoothed_q = actual_home.copy()
+            logger.info(f"IK home set from actual servo position: {actual_home}")
+            logger.info(f"IK home updated to actual servo position")
     control_thread = threading.Thread(target=telehead.control_loop, daemon=True)
     control_thread.start()
 
@@ -494,12 +542,16 @@ def main():
                     line = sys.stdin.readline()
                     if line == "":
                         break
-                    line = line.strip()
-                    if line == "" or line.lower() == "c":
+                    line = line.strip().lower()
+                    if line == "" or line == "c":
                         if telehead.calibrate_neutral():
                             print("  >>> Neutral position calibrated. Move your head to control.")
                         else:
                             print("  >>> No head pose data yet. Connect Quest first.")
+                    elif line == "p":
+                        telehead.position_tracking = not telehead.position_tracking
+                        state = "ON" if telehead.position_tracking else "OFF"
+                        print(f"  >>> Position tracking: {state}")
             except (EOFError, KeyboardInterrupt):
                 break
 
@@ -541,7 +593,8 @@ def main():
     print(f"  IK: {'active' if telehead.ik else 'disabled'}")
     print()
     print("  Open the URL on Quest 3, enter VR, then:")
-    print("  Press ENTER here to calibrate neutral head position.")
+    print("  Press ENTER to calibrate neutral head position.")
+    print("  Press P+ENTER to toggle position tracking (default: OFF).")
     print("  Press Ctrl+C to quit.")
     print("=" * 60 + "\n")
 

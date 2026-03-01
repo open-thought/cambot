@@ -11,6 +11,7 @@ Standalone usage:
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 
@@ -33,6 +34,8 @@ class ZedMiniCapture:
             self.init_params.camera_resolution = sl.RESOLUTION.HD720
         elif resolution == "1080p":
             self.init_params.camera_resolution = sl.RESOLUTION.HD1080
+        elif resolution == "2k":
+            self.init_params.camera_resolution = sl.RESOLUTION.HD2K
         elif resolution == "vga":
             self.init_params.camera_resolution = sl.RESOLUTION.VGA
         else:
@@ -47,9 +50,17 @@ class ZedMiniCapture:
 
         # Thread-safe latest frame
         self._latest_jpeg: bytes | None = None
+        self._latest_capture_ts: float = 0.0
         self._frame_lock = threading.Lock()
         self._opened = False
         self._encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+
+        # Pre-allocated stereo buffer (set in open() after getting resolution)
+        self._stereo_buffer: np.ndarray | None = None
+
+        # Event signaling for async consumers (set via set_event_loop)
+        self._frame_event: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def open(self) -> bool:
         """Open the ZED camera. Returns True on success."""
@@ -62,6 +73,10 @@ class ZedMiniCapture:
         res = info.camera_configuration.resolution
         fps = info.camera_configuration.fps
         print(f"ZED Mini opened: {res.width}x{res.height} @ {fps}fps")
+
+        # Pre-allocate stereo frame buffer (eliminates per-frame allocation)
+        self._stereo_buffer = np.empty((res.height, res.width * 2, 3), dtype=np.uint8)
+
         self._opened = True
         return True
 
@@ -77,16 +92,18 @@ class ZedMiniCapture:
         self.zed.retrieve_image(self._left_image, sl.VIEW.LEFT)
         self.zed.retrieve_image(self._right_image, sl.VIEW.RIGHT)
 
-        # Get numpy arrays (BGRA)
+        # Get numpy arrays (BGRA) and copy into pre-allocated buffer
         left_np = self._left_image.get_data()[:, :, :3]   # drop alpha
         right_np = self._right_image.get_data()[:, :, :3]
 
-        # Side-by-side
-        frame = np.hstack([left_np, right_np])
+        w = left_np.shape[1]
+        buf = self._stereo_buffer
+        buf[:, :w] = left_np
+        buf[:, w:] = right_np
 
         # Encode to JPEG
         self._encode_params[1] = quality
-        _, jpeg = cv2.imencode('.jpg', frame, self._encode_params)
+        _, jpeg = cv2.imencode('.jpg', buf, self._encode_params)
         return jpeg.tobytes()
 
     def capture_loop(self) -> None:
@@ -97,14 +114,38 @@ class ZedMiniCapture:
         while self._opened:
             jpeg = self.grab_stereo_jpeg()
             if jpeg is not None:
+                ts = time.monotonic()
                 with self._frame_lock:
                     self._latest_jpeg = jpeg
+                    self._latest_capture_ts = ts
+                # Wake async consumers waiting on frame_event
+                if self._loop is not None and self._frame_event is not None:
+                    try:
+                        self._loop.call_soon_threadsafe(self._frame_event.set)
+                    except RuntimeError:
+                        pass  # event loop closed during shutdown
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind an asyncio event loop for frame-ready signaling."""
+        self._loop = loop
+        self._frame_event = asyncio.Event()
+
+    @property
+    def frame_event(self) -> asyncio.Event | None:
+        """Asyncio event set when a new frame is available."""
+        return self._frame_event
 
     @property
     def latest_jpeg(self) -> bytes | None:
         """Get the latest captured JPEG frame (thread-safe)."""
         with self._frame_lock:
             return self._latest_jpeg
+
+    @property
+    def latest_capture_ts(self) -> float:
+        """Get the timestamp of the latest captured frame (thread-safe)."""
+        with self._frame_lock:
+            return self._latest_capture_ts
 
     def close(self) -> None:
         """Close the ZED camera."""
@@ -126,9 +167,17 @@ class FallbackCapture:
         self._height = height
         self._fps = fps
         self._latest_jpeg: bytes | None = None
+        self._latest_capture_ts: float = 0.0
         self._frame_lock = threading.Lock()
         self._opened = False
         self._encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+
+        # Pre-allocated stereo buffer (set in open() after getting resolution)
+        self._stereo_buffer: np.ndarray | None = None
+
+        # Event signaling for async consumers (set via set_event_loop)
+        self._frame_event: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def open(self) -> bool:
         """Open the camera."""
@@ -145,6 +194,10 @@ class FallbackCapture:
         w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(f"Fallback camera opened: {w}x{h}")
+
+        # Pre-allocate stereo frame buffer
+        self._stereo_buffer = np.empty((h, w * 2, 3), dtype=np.uint8)
+
         self._opened = True
         return True
 
@@ -170,22 +223,58 @@ class FallbackCapture:
             if self._cap is not None:
                 ret, frame = self._cap.read()
                 if ret:
-                    # Duplicate for stereo effect
-                    stereo = np.hstack([frame, frame])
-                    _, jpeg = cv2.imencode('.jpg', stereo, self._encode_params)
+                    # Duplicate for stereo effect into pre-allocated buffer
+                    buf = self._stereo_buffer
+                    if buf is not None:
+                        w = frame.shape[1]
+                        buf[:, :w] = frame
+                        buf[:, w:] = frame
+                        _, jpeg = cv2.imencode('.jpg', buf, self._encode_params)
+                    else:
+                        stereo = np.hstack([frame, frame])
+                        _, jpeg = cv2.imencode('.jpg', stereo, self._encode_params)
+                    ts = time.monotonic()
                     with self._frame_lock:
                         self._latest_jpeg = jpeg.tobytes()
+                        self._latest_capture_ts = ts
+                    if self._loop is not None and self._frame_event is not None:
+                        try:
+                            self._loop.call_soon_threadsafe(self._frame_event.set)
+                        except RuntimeError:
+                            pass  # event loop closed during shutdown
                 continue
             else:
                 jpeg = self._generate_test_frame()
+                ts = time.monotonic()
                 with self._frame_lock:
                     self._latest_jpeg = jpeg
+                    self._latest_capture_ts = ts
+                if self._loop is not None and self._frame_event is not None:
+                    try:
+                        self._loop.call_soon_threadsafe(self._frame_event.set)
+                    except RuntimeError:
+                        pass  # event loop closed during shutdown
                 time.sleep(1.0 / 30)
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind an asyncio event loop for frame-ready signaling."""
+        self._loop = loop
+        self._frame_event = asyncio.Event()
+
+    @property
+    def frame_event(self) -> asyncio.Event | None:
+        """Asyncio event set when a new frame is available."""
+        return self._frame_event
 
     @property
     def latest_jpeg(self) -> bytes | None:
         with self._frame_lock:
             return self._latest_jpeg
+
+    @property
+    def latest_capture_ts(self) -> float:
+        with self._frame_lock:
+            return self._latest_capture_ts
 
     def close(self) -> None:
         self._opened = False
@@ -210,7 +299,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="ZED Mini capture test")
     parser.add_argument("--fps", type=int, default=60)
-    parser.add_argument("--resolution", default="720p", choices=["720p", "1080p", "vga"])
+    parser.add_argument("--resolution", default="720p", choices=["vga", "720p", "1080p", "2k"])
     parser.add_argument("--output", default="test_stereo.jpg")
     parser.add_argument("--no-zed", action="store_true", help="Use fallback capture")
     args = parser.parse_args()
