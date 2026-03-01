@@ -2,8 +2,8 @@
 """Record-and-replay waypoint navigation for a 6-DOF Feetech STS3215 arm.
 
 Usage:
-  ./waypoint_nav.py record [-o FILE]
-  ./waypoint_nav.py replay FILE [--speed FACTOR] [--interp linear|smooth] [--loop] [--seg-time SEC]
+  python -m cambot.tools.waypoint_nav record [-o FILE]
+  python -m cambot.tools.waypoint_nav replay FILE [--speed FACTOR] [--interp linear|smooth] [--loop] [--seg-time SEC]
 
 Record mode:
   Disables torque so you can manually position the arm.
@@ -25,46 +25,25 @@ import time
 
 import scservo_sdk as scs
 
-# --- Configuration (same as servo_test.py) ---
-PORT = "/dev/ttyACM0"
-BAUDRATE = 1_000_000
-PROTOCOL_VERSION = 0
+from cambot.servo import (
+    MOTOR_NAMES,
+    ADDR_TORQUE_ENABLE,
+    ADDR_ACCELERATION,
+    ADDR_GOAL_POSITION,
+    ADDR_TORQUE_LIMIT,
+    ADDR_PRESENT_POSITION,
+    POS_MIN,
+    POS_MAX,
+    DEFAULT_PORT,
+    DEFAULT_BAUDRATE,
+    connect,
+)
 
-MOTOR_NAMES = {
-    1: "shoulder_pan",
-    2: "shoulder_lift",
-    3: "elbow_flex",
-    4: "wrist_flex",
-    5: "wrist_roll",
-    6: "gripper",
-}
-MOTOR_IDS = list(MOTOR_NAMES.keys())
-
-ADDR_TORQUE_ENABLE = 40
-ADDR_ACCELERATION = 41
-ADDR_GOAL_POSITION = 42
-ADDR_TORQUE_LIMIT = 48
-ADDR_PRESENT_POSITION = 56
-
-POS_MIN = 0
-POS_MAX = 4095
-
+MOTOR_ID_LIST = sorted(MOTOR_NAMES)
 COMMAND_RATE = 50  # Hz
 
 
 # --- Low-level helpers ---
-
-def connect(port, baudrate):
-    ph = scs.PortHandler(port)
-    pkt = scs.PacketHandler(PROTOCOL_VERSION)
-    if not ph.openPort():
-        print(f"Failed to open port {port}")
-        sys.exit(1)
-    if not ph.setBaudRate(baudrate):
-        print(f"Failed to set baud rate {baudrate}")
-        sys.exit(1)
-    return ph, pkt
-
 
 def read_position(pkt, ph, motor_id):
     pos, result, error = pkt.read2ByteTxRx(ph, motor_id, ADDR_PRESENT_POSITION)
@@ -85,19 +64,19 @@ def set_torque(pkt, ph, motor_id, enable):
 
 
 def disable_all_torque(pkt, ph):
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         set_torque(pkt, ph, mid, False)
 
 
 def init_sram(pkt, ph):
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         pkt.write1ByteTxRx(ph, mid, ADDR_ACCELERATION, 254)
         pkt.write2ByteTxRx(ph, mid, ADDR_TORQUE_LIMIT, 1000)
 
 
 def read_all_positions(pkt, ph):
     """Read positions for all motors. Returns list of ints (None on error)."""
-    return [read_position(pkt, ph, mid) for mid in MOTOR_IDS]
+    return [read_position(pkt, ph, mid) for mid in MOTOR_ID_LIST]
 
 
 # --- Interpolation ---
@@ -123,7 +102,7 @@ INTERP_FUNCS = {
 
 def save_waypoints(waypoints, filename):
     data = {
-        "motor_ids": MOTOR_IDS,
+        "motor_ids": MOTOR_ID_LIST,
         "motor_names": {str(k): v for k, v in MOTOR_NAMES.items()},
         "waypoints": [{"positions": wp} for wp in waypoints],
     }
@@ -172,14 +151,14 @@ def record_mode(stdscr, pkt, ph, output_file):
         hdr = f"{'#':<4}{'Name':<16}{'Position':>8}"
         stdscr.addstr(2, 2, hdr, curses.A_BOLD)
         stdscr.addstr(3, 2, "-" * len(hdr))
-        for i, mid in enumerate(MOTOR_IDS):
+        for i, mid in enumerate(MOTOR_ID_LIST):
             pos = positions[i]
             pos_str = str(pos) if pos is not None else "ERR"
             row = f"{mid:<4}{MOTOR_NAMES[mid]:<16}{pos_str:>8}"
             stdscr.addstr(4 + i, 2, row)
 
         # Waypoint list
-        wp_y = 4 + len(MOTOR_IDS) + 1
+        wp_y = 4 + len(MOTOR_ID_LIST) + 1
         wp_label = f"Waypoints: {len(waypoints)}"
         stdscr.addstr(wp_y, 2, wp_label, curses.A_BOLD | curses.color_pair(2))
 
@@ -276,11 +255,11 @@ def replay_mode_curses(stdscr, pkt, ph, waypoints, seg_time, speed, interp, loop
 
     # Enable torque and init SRAM
     init_sram(pkt, ph)
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         set_torque(pkt, ph, mid, True)
 
     # Move to first waypoint before starting timed playback
-    for i, mid in enumerate(MOTOR_IDS):
+    for i, mid in enumerate(MOTOR_ID_LIST):
         write_position(pkt, ph, mid, waypoints[0][i])
     time.sleep(0.5)
 
@@ -299,12 +278,12 @@ def replay_mode_curses(stdscr, pkt, ph, waypoints, seg_time, speed, interp, loop
                 t = elapsed / effective_seg_time
                 if t >= 1.0:
                     # Write final position of this segment
-                    for i, mid in enumerate(MOTOR_IDS):
+                    for i, mid in enumerate(MOTOR_ID_LIST):
                         write_position(pkt, ph, mid, p1[i])
                     break
 
                 positions = interp_fn(p0, p1, t)
-                for i, mid in enumerate(MOTOR_IDS):
+                for i, mid in enumerate(MOTOR_ID_LIST):
                     write_position(pkt, ph, mid, positions[i])
 
                 # Display
@@ -319,14 +298,14 @@ def replay_mode_curses(stdscr, pkt, ph, waypoints, seg_time, speed, interp, loop
                 hdr = f"{'#':<4}{'Name':<16}{'Target':>8}{'Current':>8}"
                 stdscr.addstr(4, 2, hdr, curses.A_BOLD)
                 stdscr.addstr(5, 2, "-" * len(hdr))
-                for i, mid in enumerate(MOTOR_IDS):
+                for i, mid in enumerate(MOTOR_ID_LIST):
                     target = int(round(positions[i]))
                     cur = read_position(pkt, ph, mid)
                     cur_str = str(cur) if cur is not None else "?"
                     row = f"{mid:<4}{MOTOR_NAMES[mid]:<16}{target:>8}{cur_str:>8}"
                     stdscr.addstr(6 + i, 2, row)
 
-                ctrl_y = 6 + len(MOTOR_IDS) + 1
+                ctrl_y = 6 + len(MOTOR_ID_LIST) + 1
                 if loop:
                     stdscr.addstr(ctrl_y, 2, "Looping enabled", curses.color_pair(1))
                 stdscr.addstr(ctrl_y + 1, 2, f"Seg time: {effective_seg_time:.2f}s  Speed: {speed:.1f}x",
@@ -364,7 +343,7 @@ def replay_mode_curses(stdscr, pkt, ph, waypoints, seg_time, speed, interp, loop
 # --- CLI ---
 
 def main():
-    parser = argparse.ArgumentParser(description="Waypoint navigation for SO-101 arm")
+    parser = argparse.ArgumentParser(description="Waypoint navigation for StereoBot arm")
     sub = parser.add_subparsers(dest="command", required=True)
 
     rec = sub.add_parser("record", help="Record waypoints by manually positioning the arm")
@@ -380,7 +359,7 @@ def main():
 
     args = parser.parse_args()
 
-    ph, pkt = connect(PORT, BAUDRATE)
+    ph, pkt = connect(DEFAULT_PORT, DEFAULT_BAUDRATE)
 
     try:
         if args.command == "record":

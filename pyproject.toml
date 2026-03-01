@@ -21,9 +21,23 @@ zed = [
 viz = [
     "viser>=0.2",
 ]
+webrtc = [
+    "aiortc>=1.9",
+]
+
+[project.scripts]
+cambot-teleop = "cambot.teleop.app:main"
+cambot-servo-test = "cambot.tools.servo_test:main"
+cambot-servo-offset = "cambot.tools.servo_offset:main"
+cambot-calibrate-limits = "cambot.tools.calibrate_limits:main"
+cambot-fix-servo-ids = "cambot.tools.fix_servo_ids:main"
+cambot-read-params = "cambot.tools.read_params:main"
+cambot-waypoint-nav = "cambot.tools.waypoint_nav:main"
+cambot-debug-control = "cambot.tools.debug_control:main"
+cambot-pid-tuning = "cambot.tools.pid_tuning:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["teleop"]
+packages = ["cambot"]
 
 [build-system]
 requires = ["hatchling"]

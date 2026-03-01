@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
-"""StereoBot servo interface.
+"""StereoBot servo controller.
 
 Provides a clean controller class wrapping scservo_sdk for the 6-DOF arm.
-Patterns extracted from visualize_urdf.py, servo_test.py, waypoint_nav.py.
 
 Standalone usage:
-    python robot_control.py              # read/write round-trip test
-    python robot_control.py --save-home  # save current position as home
+    python -m cambot.servo.controller              # read/write round-trip test
+    python -m cambot.servo.controller --save-home   # save current position as home
 """
 
 from __future__ import annotations
@@ -18,47 +16,31 @@ import time
 
 import scservo_sdk as scs
 
-# --- Constants ---
-STEPS_PER_REV = 4096
-STEPS_TO_RAD = 2.0 * math.pi / STEPS_PER_REV
-RAD_TO_STEPS = STEPS_PER_REV / (2.0 * math.pi)
-POS_SIGN_BIT = 15
-
-# Register addresses
-ADDR_TORQUE_ENABLE = 40
-ADDR_ACCELERATION = 41
-ADDR_GOAL_POSITION = 42
-ADDR_GOAL_TIME = 44
-ADDR_GOAL_VELOCITY = 46
-ADDR_TORQUE_LIMIT = 48
-ADDR_PRESENT_POSITION = 56
-
-# SRAM init values
-DEFAULT_ACCELERATION = 254
-DEFAULT_TORQUE_LIMIT = 900
-
-
-def decode_sm(raw: int, sign_bit: int) -> int:
-    """Decode sign-magnitude register value."""
-    magnitude = raw & ((1 << sign_bit) - 1)
-    return -magnitude if (raw >> sign_bit) & 1 else magnitude
-
-
-def encode_sm(value: int, sign_bit: int) -> int:
-    """Encode signed integer to sign-magnitude register value."""
-    if value >= 0:
-        return value & ((1 << sign_bit) - 1)
-    return (abs(value) & ((1 << sign_bit) - 1)) | (1 << sign_bit)
+from cambot import CALIBRATION_DIR
+from cambot.servo.constants import (
+    STEPS_PER_REV,
+    STEPS_TO_RAD,
+    RAD_TO_STEPS,
+    POS_SIGN_BIT,
+    JOINT_NAMES,
+    MOTOR_IDS,
+    ADDR_TORQUE_ENABLE,
+    ADDR_ACCELERATION,
+    ADDR_GOAL_POSITION,
+    ADDR_GOAL_VELOCITY,
+    ADDR_TORQUE_LIMIT,
+    ADDR_PRESENT_POSITION,
+    DEFAULT_ACCELERATION,
+    DEFAULT_TORQUE_LIMIT,
+)
+from cambot.servo.protocol import decode_sm, encode_sm
 
 
 class StereoBotServo:
     """Controller for the 6-DOF StereoBot arm servos."""
 
-    JOINT_NAMES = [
-        "base_yaw", "shoulder_pitch", "elbow_pitch",
-        "wrist_pitch", "wrist_yaw", "camera_roll",
-    ]
-    MOTOR_IDS = {name: mid for name, mid in zip(JOINT_NAMES, [1, 2, 3, 4, 5, 6])}
+    JOINT_NAMES = JOINT_NAMES
+    MOTOR_IDS = MOTOR_IDS
 
     def __init__(self):
         self.ph = None
@@ -424,9 +406,8 @@ if __name__ == "__main__":
                         help="Save current position as resting and exit")
     args = parser.parse_args()
 
-    cal_dir = os.path.join(os.path.dirname(__file__), "..", "calibration")
-    home_path = os.path.join(cal_dir, "home_position.json")
-    resting_path = os.path.join(cal_dir, "resting_position.json")
+    home_path = str(CALIBRATION_DIR / "home_position.json")
+    resting_path = str(CALIBRATION_DIR / "resting_position.json")
 
     servo = StereoBotServo.connect(args.port, args.baudrate)
     print(f"Connected to {args.port}")

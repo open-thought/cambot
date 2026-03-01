@@ -2,7 +2,7 @@
 """Feetech STS3215 servo offset / zero-point calibration tool.
 
 Convention: Reported_Position = Raw_Encoder - Homing_Offset
-  → Raw_Encoder = Reported_Position + Homing_Offset
+  -> Raw_Encoder = Reported_Position + Homing_Offset
 
 Commands:
   read          Show current offset, position, and position limits
@@ -13,12 +13,12 @@ Commands:
   reset-limits  Reset position limits to 0-4095
 
 Examples:
-  ./servo_offset.py read 1
-  ./servo_offset.py set-zero 3
-  ./servo_offset.py set-home 3
-  ./servo_offset.py set-position 3 1000
-  ./servo_offset.py clear-offset 3
-  ./servo_offset.py reset-limits 4
+  python -m cambot.tools.servo_offset read 1
+  python -m cambot.tools.servo_offset set-zero 3
+  python -m cambot.tools.servo_offset set-home 3
+  python -m cambot.tools.servo_offset set-position 3 1000
+  python -m cambot.tools.servo_offset clear-offset 3
+  python -m cambot.tools.servo_offset reset-limits 4
 """
 
 import argparse
@@ -27,58 +27,34 @@ import time
 
 import scservo_sdk as scs
 
-# --- Defaults ---
-DEFAULT_PORT = "/dev/ttyACM0"
-DEFAULT_BAUDRATE = 1_000_000
-PROTOCOL_VERSION = 0
-
-# --- Register addresses ---
-ADDR_MIN_POSITION_LIMIT = 9   # 2 bytes, EPROM
-ADDR_MAX_POSITION_LIMIT = 11  # 2 bytes, EPROM
-ADDR_HOMING_OFFSET = 31       # 2 bytes, EPROM, sign-magnitude bit 11
-ADDR_TORQUE_ENABLE = 40       # 1 byte, SRAM
-ADDR_ACCELERATION = 41        # 1 byte, SRAM
-ADDR_GOAL_POSITION = 42       # 2 bytes, SRAM, sign-magnitude bit 15
-ADDR_TORQUE_LIMIT = 48        # 2 bytes, SRAM
-ADDR_LOCK = 55                # 1 byte, SRAM (0 = EPROM unlocked)
-ADDR_PRESENT_POSITION = 56    # 2 bytes, SRAM, sign-magnitude bit 15
-ADDR_MOVING = 66              # 1 byte, SRAM
-
-POS_FULL_MIN = 0
-POS_FULL_MAX = 4095
-
-# --- Sign-magnitude helpers ---
-OFFSET_SIGN_BIT = 11   # magnitude 0-2047
-POS_SIGN_BIT = 15      # magnitude 0-32767
-OFFSET_MAX = (1 << OFFSET_SIGN_BIT) - 1  # 2047
-
-
-def decode_sm(raw, sign_bit):
-    """Decode a sign-magnitude register value to a signed integer."""
-    magnitude = raw & ((1 << sign_bit) - 1)
-    return -magnitude if (raw >> sign_bit) & 1 else magnitude
+from cambot.servo import (
+    DEFAULT_PORT,
+    DEFAULT_BAUDRATE,
+    POS_MIN,
+    POS_MAX,
+    POS_SIGN_BIT,
+    OFFSET_SIGN_BIT,
+    OFFSET_MAX,
+    ADDR_MIN_POSITION_LIMIT,
+    ADDR_MAX_POSITION_LIMIT,
+    ADDR_HOMING_OFFSET,
+    ADDR_TORQUE_ENABLE,
+    ADDR_ACCELERATION,
+    ADDR_GOAL_POSITION,
+    ADDR_TORQUE_LIMIT,
+    ADDR_MOVING,
+    ADDR_PRESENT_POSITION,
+    decode_sm,
+    encode_sm,
+    connect,
+    flush_serial,
+    unlock_eprom,
+    lock_eprom,
+    write_eprom_u16,
+)
 
 
-def encode_sm(value, sign_bit):
-    """Encode a signed integer to sign-magnitude register value."""
-    if value >= 0:
-        return value & ((1 << sign_bit) - 1)
-    return (abs(value) & ((1 << sign_bit) - 1)) | (1 << sign_bit)
-
-
-# --- Low-level helpers ---
-
-def connect(port, baudrate):
-    ph = scs.PortHandler(port)
-    pkt = scs.PacketHandler(PROTOCOL_VERSION)
-    if not ph.openPort():
-        print(f"ERROR: Cannot open {port}")
-        sys.exit(1)
-    if not ph.setBaudRate(baudrate):
-        print(f"ERROR: Cannot set baud rate {baudrate}")
-        sys.exit(1)
-    return ph, pkt
-
+# --- Local read helpers ---
 
 def read_offset(ph, pkt, mid):
     """Return (raw, decoded) offset or (None, None) on error."""
@@ -107,57 +83,14 @@ def read_position_limits(ph, pkt, mid):
     return lo, hi
 
 
-def flush_serial(ph):
-    """Flush any stale data from the serial buffer."""
-    if hasattr(ph, 'ser') and ph.ser is not None:
-        ph.ser.reset_input_buffer()
-    time.sleep(0.02)
-
-
-def unlock_eprom(ph, pkt, mid):
-    """Disable torque and unlock EPROM for writing."""
-    flush_serial(ph)
-    pkt.write1ByteTxRx(ph, mid, ADDR_TORQUE_ENABLE, 0)
-    time.sleep(0.05)
-    flush_serial(ph)
-    pkt.write1ByteTxRx(ph, mid, ADDR_LOCK, 0)
-    time.sleep(0.05)
-
-
-def lock_eprom(ph, pkt, mid):
-    """Lock EPROM after writing."""
-    time.sleep(0.01)
-    pkt.write1ByteTxRx(ph, mid, ADDR_LOCK, 1)
-
-
-def write_eprom_u16(ph, pkt, mid, addr, value):
-    """Write a 2-byte EPROM register, verify by read-back."""
-    unlock_eprom(ph, pkt, mid)
-    flush_serial(ph)
-    pkt.write2ByteTxRx(ph, mid, addr, value)
-    time.sleep(0.05)
-    lock_eprom(ph, pkt, mid)
-    time.sleep(0.05)
-    # Verify by reading back
-    flush_serial(ph)
-    readback, res, _ = pkt.read2ByteTxRx(ph, mid, addr)
-    if res != scs.COMM_SUCCESS:
-        print(f"  DEBUG: read-back failed for addr={addr}")
-        return False
-    if readback != value:
-        print(f"  DEBUG: addr={addr} expected {value} but read {readback}")
-        return False
-    return True
-
-
 def reset_position_limits(ph, pkt, mid):
     """Reset position limits to full range 0-4095."""
     unlock_eprom(ph, pkt, mid)
     flush_serial(ph)
-    pkt.write2ByteTxRx(ph, mid, ADDR_MIN_POSITION_LIMIT, POS_FULL_MIN)
+    pkt.write2ByteTxRx(ph, mid, ADDR_MIN_POSITION_LIMIT, POS_MIN)
     time.sleep(0.05)
     flush_serial(ph)
-    pkt.write2ByteTxRx(ph, mid, ADDR_MAX_POSITION_LIMIT, POS_FULL_MAX)
+    pkt.write2ByteTxRx(ph, mid, ADDR_MAX_POSITION_LIMIT, POS_MAX)
     time.sleep(0.05)
     lock_eprom(ph, pkt, mid)
     time.sleep(0.05)
@@ -166,9 +99,9 @@ def reset_position_limits(ph, pkt, mid):
     lo, r1, _ = pkt.read2ByteTxRx(ph, mid, ADDR_MIN_POSITION_LIMIT)
     hi, r2, _ = pkt.read2ByteTxRx(ph, mid, ADDR_MAX_POSITION_LIMIT)
     ok = (r1 == scs.COMM_SUCCESS and r2 == scs.COMM_SUCCESS
-          and lo == POS_FULL_MIN and hi == POS_FULL_MAX)
+          and lo == POS_MIN and hi == POS_MAX)
     if not ok:
-        print(f"  DEBUG: limits readback: [{lo}, {hi}] (expected [{POS_FULL_MIN}, {POS_FULL_MAX}])")
+        print(f"  DEBUG: limits readback: [{lo}, {hi}] (expected [{POS_MIN}, {POS_MAX}])")
     return ok
 
 
@@ -204,7 +137,7 @@ def print_status(ph, pkt, mid):
     print(f"  Reported position:{pos:+d}")
     print(f"  Raw encoder:      {raw_encoder:+d}  (position + offset)")
     print(f"  Position limits:  [{lim_min}, {lim_max}]"
-          f"{'  (full range)' if lim_min == POS_FULL_MIN and lim_max == POS_FULL_MAX else ''}")
+          f"{'  (full range)' if lim_min == POS_MIN and lim_max == POS_MAX else ''}")
     return offset, pos
 
 
@@ -220,7 +153,7 @@ def cmd_set_position(ph, pkt, mid, target_pos, yes=False):
     """Set the homing offset so that the current position reads as target_pos.
 
     The servo does NOT move.  Formula:
-      new_offset = (raw_encoder - target_pos) mod 4096, wrapped to ±2047
+      new_offset = (raw_encoder - target_pos) mod 4096, wrapped to +/-2047
       where raw_encoder = reported_position + old_offset
 
     Position arithmetic wraps mod 4096, so we pick the smallest-magnitude
@@ -242,7 +175,7 @@ def cmd_set_position(ph, pkt, mid, target_pos, yes=False):
 
     if abs(new_offset) > OFFSET_MAX:
         print(f"\n  ERROR: Required offset {new_offset:+d} exceeds register "
-              f"range ±{OFFSET_MAX}.")
+              f"range +/-{OFFSET_MAX}.")
         print(f"  (raw encoder is {raw_encoder}, target is {target_pos})")
         return False
 
@@ -273,12 +206,12 @@ def cmd_reset_limits(ph, pkt, mid, yes=False):
         return False
 
     lim_min, lim_max = read_position_limits(ph, pkt, mid)
-    if lim_min == POS_FULL_MIN and lim_max == POS_FULL_MAX:
-        print("  Limits are already full range — nothing to do.")
+    if lim_min == POS_MIN and lim_max == POS_MAX:
+        print("  Limits are already full range -- nothing to do.")
         return True
 
     print(f"\n  Will reset limits from [{lim_min}, {lim_max}] to "
-          f"[{POS_FULL_MIN}, {POS_FULL_MAX}]")
+          f"[{POS_MIN}, {POS_MAX}]")
 
     if not yes:
         resp = input("\nProceed? [y/N] ")
@@ -299,24 +232,24 @@ def cmd_reset_limits(ph, pkt, mid, yes=False):
 
 def cmd_clear_offset(ph, pkt, mid, yes=False):
     """Reset position limits to 0-4095, clear the homing offset, then drive
-    the motor to position 2048 (mid-range, giving ~180° room in each direction).
-    After this, reported position ≈ 2048 with no offset.
+    the motor to position 2048 (mid-range, giving ~180 deg room in each direction).
+    After this, reported position ~ 2048 with no offset.
     """
     offset, pos = print_status(ph, pkt, mid)
     if offset is None:
         return False
 
     lim_min, lim_max = read_position_limits(ph, pkt, mid)
-    limits_need_reset = not (lim_min == POS_FULL_MIN and lim_max == POS_FULL_MAX)
+    limits_need_reset = not (lim_min == POS_MIN and lim_max == POS_MAX)
     has_offset = offset != 0
 
     raw_encoder = pos + offset
-    target = POS_FULL_MAX // 2  # 2047, effectively 2048 center
+    target = POS_MAX // 2  # 2047, effectively 2048 center
     step = 1
     print(f"\n  Plan:")
     if limits_need_reset:
-        print(f"    {step}. Reset position limits [{lim_min}, {lim_max}] → "
-              f"[{POS_FULL_MIN}, {POS_FULL_MAX}]")
+        print(f"    {step}. Reset position limits [{lim_min}, {lim_max}] -> "
+              f"[{POS_MIN}, {POS_MAX}]")
         step += 1
     if has_offset:
         print(f"    {step}. Clear offset to 0  "
@@ -332,7 +265,7 @@ def cmd_clear_offset(ph, pkt, mid, yes=False):
 
     # Step 1: Reset position limits if needed
     if limits_need_reset:
-        print(f"  Resetting position limits to [{POS_FULL_MIN}, {POS_FULL_MAX}]...")
+        print(f"  Resetting position limits to [{POS_MIN}, {POS_MAX}]...")
         if not reset_position_limits(ph, pkt, mid):
             print("ERROR: Failed to reset position limits")
             return False
@@ -431,7 +364,7 @@ def main():
         elif args.command == "set-position":
             if args.value is None:
                 print("ERROR: set-position requires a value argument")
-                print("Usage: servo_offset.py set-position MOTOR_ID VALUE")
+                print("Usage: python -m cambot.tools.servo_offset set-position MOTOR_ID VALUE")
                 sys.exit(1)
             ok = cmd_set_position(ph, pkt, args.motor_id, args.value,
                                   yes=args.yes)

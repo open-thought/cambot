@@ -8,63 +8,34 @@ Workflow:
   2. Asks you to manually move the robot to the zero/home pose and press Enter
   3. Records the current positions as the zero reference
   4. You move each joint to its limits while the script tracks min/max
-  5. Press Enter to finish — prints limits in encoder steps, degrees, and radians
+  5. Press Enter to finish -- prints limits in encoder steps, degrees, and radians
 
 Usage:
-  ./calibrate_limits.py
-  ./calibrate_limits.py --port /dev/ttyACM0
+  python -m cambot.tools.calibrate_limits
+  python -m cambot.tools.calibrate_limits --port /dev/ttyACM0
 """
 
-import math
 import sys
 import time
 import select
 
 import scservo_sdk as scs
 
-# --- Configuration ---
-DEFAULT_PORT = "/dev/ttyACM0"
-DEFAULT_BAUDRATE = 1_000_000
-PROTOCOL_VERSION = 0
+from cambot.servo import (
+    MOTOR_NAMES,
+    ADDR_TORQUE_ENABLE,
+    ADDR_PRESENT_POSITION,
+    POS_SIGN_BIT,
+    STEPS_PER_REV,
+    STEPS_TO_DEG,
+    STEPS_TO_RAD,
+    DEFAULT_PORT,
+    DEFAULT_BAUDRATE,
+    decode_sm,
+    connect,
+)
 
-MOTOR_NAMES = {
-    1: "base_yaw",
-    2: "shoulder_pitch",
-    3: "elbow_pitch",
-    4: "wrist_pitch",
-    5: "wrist_yaw",
-    6: "camera_yaw",
-}
-MOTOR_IDS = list(MOTOR_NAMES.keys())
-
-# Register addresses
-ADDR_TORQUE_ENABLE = 40
-ADDR_PRESENT_POSITION = 56
-
-# Conversion: 4096 encoder steps = 360 degrees = 2*pi radians
-STEPS_PER_REV = 4096
-STEPS_TO_DEG = 360.0 / STEPS_PER_REV
-STEPS_TO_RAD = 2.0 * math.pi / STEPS_PER_REV
-
-# Sign-magnitude bit for position register
-POS_SIGN_BIT = 15
-
-
-def decode_sm(raw, sign_bit):
-    magnitude = raw & ((1 << sign_bit) - 1)
-    return -magnitude if (raw >> sign_bit) & 1 else magnitude
-
-
-def connect(port, baudrate):
-    ph = scs.PortHandler(port)
-    pkt = scs.PacketHandler(PROTOCOL_VERSION)
-    if not ph.openPort():
-        print(f"ERROR: Cannot open {port}")
-        sys.exit(1)
-    if not ph.setBaudRate(baudrate):
-        print(f"ERROR: Cannot set baud rate {baudrate}")
-        sys.exit(1)
-    return ph, pkt
+MOTOR_ID_LIST = sorted(MOTOR_NAMES)
 
 
 def read_position(ph, pkt, mid):
@@ -79,6 +50,9 @@ def stdin_ready():
 
 
 def main():
+    # Print 4 blank lines so the cursor-up escape codes work on first iteration
+    print("\n\n\n")
+
     import argparse
     parser = argparse.ArgumentParser(description="StereoBot joint limit calibration")
     parser.add_argument("--port", default=DEFAULT_PORT)
@@ -89,7 +63,7 @@ def main():
 
     # --- Ping all motors ---
     print("Pinging motors...")
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         _, res, _ = pkt.ping(ph, mid)
         if res != scs.COMM_SUCCESS:
             print(f"  ERROR: Motor {mid} ({MOTOR_NAMES[mid]}) not responding!")
@@ -100,7 +74,7 @@ def main():
     print()
 
     # --- Ensure torque is disabled (read-only mode) ---
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         pkt.write1ByteTxRx(ph, mid, ADDR_TORQUE_ENABLE, 0)
     print("Torque disabled on all motors.\n")
 
@@ -111,7 +85,7 @@ def main():
 
     zero_pos = {}
     print("Zero reference recorded:")
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         pos = read_position(ph, pkt, mid)
         if pos is None:
             print(f"  ERROR: Cannot read motor {mid} ({MOTOR_NAMES[mid]})")
@@ -127,13 +101,13 @@ def main():
 
     # Unwrapped position tracking: track deltas to handle encoder wrap at 4095/0
     prev_pos = dict(zero_pos)          # last raw reading per motor
-    unwrapped = {mid: 0 for mid in MOTOR_IDS}  # accumulated displacement from zero
-    min_pos = {mid: 0 for mid in MOTOR_IDS}
-    max_pos = {mid: 0 for mid in MOTOR_IDS}
+    unwrapped = {mid: 0 for mid in MOTOR_ID_LIST}  # accumulated displacement from zero
+    min_pos = {mid: 0 for mid in MOTOR_ID_LIST}
+    max_pos = {mid: 0 for mid in MOTOR_ID_LIST}
 
     # Build header
     header = ""
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         name = MOTOR_NAMES[mid][:10]
         header += f" {name:>10}"
     print(f"{'':>12}{header}")
@@ -146,7 +120,7 @@ def main():
             max_line = "      max: "
             rng_line = "    range: "
 
-            for mid in MOTOR_IDS:
+            for mid in MOTOR_ID_LIST:
                 raw = read_position(ph, pkt, mid)
                 if raw is not None:
                     # Unwrap: detect wraps by checking if delta exceeds half a revolution
@@ -196,7 +170,7 @@ def main():
     print(f"{'Joint':<18} {'Zero':>7} {'Min':>7} {'Max':>7}  {'Min (deg)':>10} {'Max (deg)':>10}  {'Min (rad)':>10} {'Max (rad)':>10}")
     print("-" * 88)
 
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         name = MOTOR_NAMES[mid]
         lo = min_pos[mid]
         hi = max_pos[mid]
@@ -209,7 +183,7 @@ def main():
     print()
     print("URDF joint limits (copy-paste):")
     print()
-    for mid in MOTOR_IDS:
+    for mid in MOTOR_ID_LIST:
         name = MOTOR_NAMES[mid]
         lo_rad = min_pos[mid] * STEPS_TO_RAD
         hi_rad = max_pos[mid] * STEPS_TO_RAD
@@ -221,6 +195,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Print 4 blank lines so the cursor-up escape codes work on first iteration
-    print("\n\n\n")
     main()

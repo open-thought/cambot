@@ -8,11 +8,11 @@ Tuning poses are user-defined: physically position the robot to safe loaded
 positions, capture them with --capture-poses, then tune using those poses.
 
 Usage:
-    python teleop/pid_tuning.py --capture-poses                     # capture poses
-    python teleop/pid_tuning.py --capture-poses --joints shoulder_pitch,elbow_pitch
-    python teleop/pid_tuning.py --joints shoulder_pitch --verbose    # tune
-    python teleop/pid_tuning.py --dry-run --verbose                  # measure only
-    python teleop/pid_tuning.py --restore-factory                    # reset PID
+    python -m cambot.tools.pid_tuning --capture-poses
+    python -m cambot.tools.pid_tuning --capture-poses --joints shoulder_pitch,elbow_pitch
+    python -m cambot.tools.pid_tuning --joints shoulder_pitch --verbose
+    python -m cambot.tools.pid_tuning --dry-run --verbose
+    python -m cambot.tools.pid_tuning --restore-factory
 """
 
 from __future__ import annotations
@@ -20,41 +20,29 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 
 import scservo_sdk as scs
 
-# Add parent to path for imports
-sys.path.insert(0, os.path.dirname(__file__))
-
-from robot_control import (
-    StereoBotServo,
-    decode_sm,
+from cambot import CALIBRATION_DIR
+from cambot.servo import (
+    JOINT_NAMES,
     POS_SIGN_BIT,
     ADDR_TORQUE_ENABLE,
     ADDR_PRESENT_POSITION,
+    ADDR_P_COEFFICIENT,
+    ADDR_D_COEFFICIENT,
+    ADDR_I_COEFFICIENT,
+    ADDR_LOCK,
+    ADDR_PRESENT_VELOCITY,
+    PID_FACTORY_DEFAULTS,
+    decode_sm,
 )
-
-# --- Register addresses ---
-ADDR_P_COEFFICIENT = 21
-ADDR_D_COEFFICIENT = 22
-ADDR_I_COEFFICIENT = 23
-ADDR_LOCK = 55
-ADDR_PRESENT_SPEED = 58
-
-# Factory defaults
-PID_FACTORY = (16, 32, 0)
-
-JOINT_NAMES = [
-    "base_yaw", "shoulder_pitch", "elbow_pitch",
-    "wrist_pitch", "wrist_yaw", "camera_roll",
-]
+from cambot.servo.controller import StereoBotServo
 
 # Calibration paths
-CAL_DIR = os.path.join(os.path.dirname(__file__), "..", "calibration")
-POSES_PATH = os.path.join(CAL_DIR, "pid_tuning_poses.json")
+POSES_PATH = str(CALIBRATION_DIR / "pid_tuning_poses.json")
 
 
 def load_tuning_poses(path: str) -> dict[str, list[dict[str, int]]]:
@@ -68,7 +56,7 @@ def load_tuning_poses(path: str) -> dict[str, list[dict[str, int]]]:
         return json.load(f)
 
 
-def capture_poses(servo: "StereoBotServo", joints: list[str], path: str) -> None:
+def capture_poses(servo: StereoBotServo, joints: list[str], path: str) -> None:
     """Interactive pose capture: disable torque, let user position robot, record."""
     print("=== Pose Capture Mode ===")
     print("Torque disabled. Manually position the robot for each pose.\n")
@@ -153,7 +141,7 @@ class ResponseMetrics:
     is_unstable: bool = False
 
     @classmethod
-    def from_step_response(cls, data: StepResponseData) -> "ResponseMetrics":
+    def from_step_response(cls, data: StepResponseData) -> ResponseMetrics:
         """Compute metrics from recorded step response data."""
         if len(data.timestamps) < 10:
             return cls(is_unstable=True)
@@ -269,10 +257,6 @@ class PIDTuner:
             self.servo.disconnect()
             print("Disconnected.")
 
-    def _blocking_timeout(self):
-        """Context-like helper: save and set blocking write timeout."""
-        return self.servo.ph.ser.write_timeout
-
     def read_pid(self, joint: str) -> tuple[int, int, int]:
         """Read current PID coefficients from a joint."""
         mid = StereoBotServo.MOTOR_IDS[joint]
@@ -354,9 +338,6 @@ class PIDTuner:
 
         t_end = time.monotonic() + duration
         mid = StereoBotServo.MOTOR_IDS[joint]
-        # Safety limit: abort if servo diverges beyond starting distance + margin.
-        # This correctly handles any step size — at the start, pos ≈ start so the
-        # check passes; it only triggers if the servo moves AWAY from the target.
         initial_distance = abs(start - target)
         safety_limit = initial_distance + SAFETY_POSITION_ERROR
 
@@ -387,12 +368,7 @@ class PIDTuner:
         return data
 
     def evaluate_pid(self, joint: str, p: int, d: int, i: int) -> tuple[float, ResponseMetrics]:
-        """Run step response tests with given PID, return (worst_cost, worst_metrics).
-
-        Iterates over consecutive pose pairs from the poses file. For each pair,
-        drives the full robot to pose_a, then steps the tested joint to pose_b's
-        value and back. Returns worst-case cost across all pose pairs and directions.
-        """
+        """Run step response tests with given PID, return (worst_cost, worst_metrics)."""
         poses = self.poses[joint]
 
         # Write PID
@@ -411,7 +387,7 @@ class PIDTuner:
             start_pos = self._read_position(joint)
             target_pos = pose_b[joint]
 
-            # Forward step: tested joint from pose_a -> pose_b value
+            # Forward step
             data_fwd = self.record_step_response(joint, start_pos, target_pos, duration=3.0)
             metrics_fwd = ResponseMetrics.from_step_response(data_fwd)
             cost_fwd = compute_cost(metrics_fwd)
@@ -426,7 +402,7 @@ class PIDTuner:
 
             time.sleep(0.3)
 
-            # Reverse step: tested joint back to pose_a value
+            # Reverse step
             actual = self._read_position(joint)
             data_rev = self.record_step_response(joint, actual, pose_a[joint], duration=3.0)
             metrics_rev = ResponseMetrics.from_step_response(data_rev)
@@ -450,10 +426,7 @@ class PIDTuner:
         return worst_cost, worst_metrics
 
     def optimize_joint(self, joint: str) -> dict:
-        """Run coordinate descent optimization for one joint.
-
-        Returns dict with best PID, metrics, and evaluation count.
-        """
+        """Run coordinate descent optimization for one joint."""
         print(f"\n{'='*60}")
         print(f"Tuning: {joint}")
         print(f"{'='*60}")
@@ -482,7 +455,7 @@ class PIDTuner:
                 best_p_cost = cost
                 best_p = p
 
-        # Refine: try ±25% around best P
+        # Refine: try +/-25% around best P
         refine_p = [max(1, int(best_p * 0.75)), max(1, int(best_p * 1.25))]
         refine_p = [p for p in refine_p if p not in p_values and 1 <= p <= 255]
         for p in refine_p:
@@ -528,7 +501,7 @@ class PIDTuner:
 
         print(f"  Best I: {best_i} (cost={best_i_cost:.3f})")
 
-        # --- Refinement: re-check P±10%, D±10% with I active ---
+        # --- Refinement ---
         print(f"\n  Phase 4: Refinement (P~{best_p}, D~{best_d}, I={best_i})...")
         best_final_cost = best_i_cost
         final_metrics = best_i_metrics
@@ -584,7 +557,7 @@ class PIDTuner:
         """Reset all joints to factory PID defaults."""
         print("Restoring factory PID defaults...")
         for joint in JOINT_NAMES:
-            self.write_pid(joint, *PID_FACTORY)
+            self.write_pid(joint, *PID_FACTORY_DEFAULTS)
             readback = self.read_pid(joint)
             print(f"  {joint}: P={readback[0]} D={readback[1]} I={readback[2]}")
         print("Done.")
@@ -603,7 +576,7 @@ class PIDTuner:
         # Validate poses exist for all requested joints
         missing = [j for j in joints if j not in self.poses or len(self.poses[j]) < 2]
         if missing:
-            print(f"ERROR: No tuning poses (need ≥2) for: {', '.join(missing)}")
+            print(f"ERROR: No tuning poses (need >=2) for: {', '.join(missing)}")
             print(f"Run with --capture-poses first to define safe positions.")
             print(f"Poses file: {self.poses_path}")
             return
@@ -679,6 +652,7 @@ class PIDTuner:
 
 
 def main():
+    cal_dir = str(CALIBRATION_DIR)
     parser = argparse.ArgumentParser(
         description="PID Auto-Tuner for StereoBot servos",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -704,7 +678,7 @@ Examples:
                         help="Measure only, don't write PID")
     parser.add_argument("--restore-factory", action="store_true",
                         help="Reset to factory defaults and exit")
-    parser.add_argument("--output", default=os.path.join(CAL_DIR, "pid_results.json"),
+    parser.add_argument("--output", default=os.path.join(cal_dir, "pid_results.json"),
                         help="Results JSON path")
     parser.add_argument("--verbose", action="store_true",
                         help="Print detailed metrics per evaluation")

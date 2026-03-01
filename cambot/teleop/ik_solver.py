@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 """IK solver for StereoBot using ikpy + URDF.
 
 Computes inverse kinematics for the 6-DOF arm to position/orient the
 ZED Mini camera mount based on VR head tracking input.
 
 Standalone usage:
-    python ik_solver.py                    # FK→IK round-trip test
-    python ik_solver.py --home FILE        # test with saved home position
+    python -m cambot.teleop.ik_solver                    # FK→IK round-trip test
+    python -m cambot.teleop.ik_solver --home FILE        # test with saved home position
 """
 
 from __future__ import annotations
@@ -17,12 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-URDF_PATH = Path(__file__).parent.parent / "urdf" / "stereobot.urdf"
-
-JOINT_NAMES = [
-    "base_yaw", "shoulder_pitch", "elbow_pitch",
-    "wrist_pitch", "wrist_yaw", "camera_roll",
-]
+from cambot import URDF_PATH
+from cambot.servo.constants import JOINT_NAMES
 
 # VR (WebXR: Y-up, -Z forward) to Robot (Z-up, +X forward) rotation matrix.
 # This is a fixed frame transform applied to VR deltas before IK.

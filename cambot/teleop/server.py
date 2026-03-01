@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # --- WebRTC (optional) ---
 try:
-    from webrtc_track import WebRTCManager
+    from cambot.teleop.webrtc import WebRTCManager
     HAS_WEBRTC = True
 except ImportError:
     HAS_WEBRTC = False

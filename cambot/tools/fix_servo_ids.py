@@ -3,22 +3,19 @@
 
 Usage examples:
   # Scan for all connected servos (IDs 0-253)
-  python fix_servo_ids.py --scan
+  python -m cambot.tools.fix_servo_ids --scan
 
   # Scan a smaller range
-  python fix_servo_ids.py --scan --max-id 10
+  python -m cambot.tools.fix_servo_ids --scan --max-id 10
 
   # Set the ID of a single connected servo (auto-detects current ID)
-  python fix_servo_ids.py --set-id 3
+  python -m cambot.tools.fix_servo_ids --set-id 3
 
   # Change a servo from a known ID to a new ID
-  python fix_servo_ids.py --set-id 3 --from-id 1
+  python -m cambot.tools.fix_servo_ids --set-id 3 --from-id 1
 
   # Interactive mode (original behavior: fix servos stuck at ID 0)
-  python fix_servo_ids.py
-
-  # Use a different port or baud rate
-  python fix_servo_ids.py --scan --port /dev/ttyUSB0 --baud 115200
+  python -m cambot.tools.fix_servo_ids
 """
 
 import argparse
@@ -27,32 +24,15 @@ import time
 
 import scservo_sdk as scs
 
-DEFAULT_PORT = "/dev/ttyACM0"
-DEFAULT_BAUDRATE = 1_000_000
-PROTOCOL_VERSION = 0
-
-ADDR_ID = 5        # 1 byte, EPROM
-ADDR_LOCK = 55     # 1 byte, SRAM (0=unlock EPROM, 1=lock)
-ADDR_TORQUE = 40   # 1 byte
-
-MOTOR_NAMES = {
-    1: "shoulder_pan",
-    2: "shoulder_lift",
-    3: "elbow_flex",
-    4: "wrist_flex",
-    5: "wrist_roll",
-    6: "gripper",
-}
-
-
-def open_port(port, baudrate):
-    port_handler = scs.PortHandler(port)
-    packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
-    if not port_handler.openPort():
-        print(f"Failed to open {port}")
-        sys.exit(1)
-    port_handler.setBaudRate(baudrate)
-    return port_handler, packet_handler
+from cambot.servo import (
+    DEFAULT_PORT,
+    DEFAULT_BAUDRATE,
+    MOTOR_NAMES,
+    ADDR_ID,
+    ADDR_TORQUE_ENABLE,
+    ADDR_LOCK,
+    connect,
+)
 
 
 def scan_servos(port_handler, packet_handler, max_id):
@@ -74,7 +54,7 @@ def change_id(port_handler, packet_handler, old_id, new_id):
         return False
 
     # Disable torque
-    packet_handler.write1ByteTxRx(port_handler, old_id, ADDR_TORQUE, 0)
+    packet_handler.write1ByteTxRx(port_handler, old_id, ADDR_TORQUE_ENABLE, 0)
     time.sleep(0.01)
     # Unlock EPROM
     packet_handler.write1ByteTxRx(port_handler, old_id, ADDR_LOCK, 0)
@@ -104,7 +84,7 @@ def change_id(port_handler, packet_handler, old_id, new_id):
 
 def cmd_scan(args):
     """Scan for all connected servos and print results."""
-    port_handler, packet_handler = open_port(args.port, args.baud)
+    port_handler, packet_handler = connect(args.port, args.baud)
     print(f"Scanning for servos at IDs 0-{args.max_id} on {args.port} @ {args.baud}...")
     found = scan_servos(port_handler, packet_handler, args.max_id)
     port_handler.closePort()
@@ -129,7 +109,7 @@ def cmd_set_id(args):
         print("New ID must be 0-253.")
         sys.exit(1)
 
-    port_handler, packet_handler = open_port(args.port, args.baud)
+    port_handler, packet_handler = connect(args.port, args.baud)
 
     if args.from_id is not None:
         # User specified the current ID explicitly
@@ -167,7 +147,7 @@ def cmd_set_id(args):
 
 def cmd_interactive(args):
     """Original interactive mode: fix servos stuck at ID 0."""
-    port_handler, packet_handler = open_port(args.port, args.baud)
+    port_handler, packet_handler = connect(args.port, args.baud)
 
     print("Scanning for servos at IDs 0-6...")
     found = scan_servos(port_handler, packet_handler, 6)
@@ -180,7 +160,7 @@ def cmd_interactive(args):
     print(f"\nServos found at IDs: {found}")
 
     if 0 not in found:
-        print("No servo at ID 0 — nothing to fix, or already recovered.")
+        print("No servo at ID 0 -- nothing to fix, or already recovered.")
         print("If all IDs 1-6 respond, you're good!")
         port_handler.closePort()
         return
@@ -190,8 +170,8 @@ def cmd_interactive(args):
     print("Disconnect all others from the daisy chain first.\n")
 
     print("Motor assignments:")
-    for mid, name in MOTOR_NAMES.items():
-        print(f"  ID {mid}: {name}")
+    for mid in sorted(MOTOR_NAMES):
+        print(f"  ID {mid}: {MOTOR_NAMES[mid]}")
 
     while True:
         new_id_str = input("\nEnter new ID to assign (1-6), or 'q' to quit: ").strip()
@@ -214,7 +194,7 @@ def cmd_interactive(args):
         # Check if another servo still at ID 0
         _, result, _ = packet_handler.ping(port_handler, 0)
         if result == scs.COMM_SUCCESS:
-            print("  (Another servo still at ID 0 — more to fix)")
+            print("  (Another servo still at ID 0 -- more to fix)")
 
     port_handler.closePort()
     print("Done.")

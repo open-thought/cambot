@@ -13,8 +13,8 @@ Shared controls:
   q/ESC Quit (ESC only in Cartesian mode, since Q=Z-up)
 
 Usage:
-    python teleop/debug_control.py
-    python teleop/debug_control.py --port /dev/ttyACM0
+    python -m cambot.tools.debug_control
+    python -m cambot.tools.debug_control --port /dev/ttyACM0
 """
 
 from __future__ import annotations
@@ -24,19 +24,14 @@ import curses
 import json
 import math
 import os
-import sys
 import time
 
 import numpy as np
 import scservo_sdk as scs
 
-# Add parent to path for imports
-sys.path.insert(0, os.path.dirname(__file__))
-
-from robot_control import (
-    StereoBotServo,
-    decode_sm,
-    encode_sm,
+from cambot import CALIBRATION_DIR
+from cambot.servo import (
+    JOINT_NAMES,
     STEPS_PER_REV,
     STEPS_TO_RAD,
     RAD_TO_STEPS,
@@ -44,29 +39,30 @@ from robot_control import (
     ADDR_TORQUE_ENABLE,
     ADDR_GOAL_POSITION,
     ADDR_PRESENT_POSITION,
+    ADDR_P_COEFFICIENT,
+    ADDR_D_COEFFICIENT,
+    ADDR_I_COEFFICIENT,
+    ADDR_LOCK,
+    ADDR_PRESENT_VELOCITY,
+    ADDR_PRESENT_LOAD,
+    ADDR_PRESENT_VOLTAGE,
+    ADDR_PRESENT_TEMPERATURE,
+    ADDR_PRESENT_CURRENT,
+    PID_FACTORY_DEFAULTS,
+    decode_sm,
+    encode_sm,
 )
-from ik_solver import StereoBotIK, JOINT_NAMES
-
-# --- Register addresses for extended telemetry ---
-ADDR_P_COEFFICIENT = 21   # 1 byte, EPROM
-ADDR_D_COEFFICIENT = 22   # 1 byte, EPROM
-ADDR_I_COEFFICIENT = 23   # 1 byte, EPROM
-ADDR_LOCK = 55            # 1 byte, SRAM (0=EPROM unlocked)
-ADDR_PRESENT_SPEED = 58   # 2 bytes, sign-magnitude bit 15
-ADDR_PRESENT_LOAD = 60    # 2 bytes, sign-magnitude bit 10
-ADDR_PRESENT_VOLTAGE = 62 # 1 byte, x0.1V
-ADDR_PRESENT_TEMPERATURE = 63  # 1 byte, Celsius
-ADDR_PRESENT_CURRENT = 69 # 2 bytes, unsigned, mA
+from cambot.servo.controller import StereoBotServo
+from cambot.teleop.ik_solver import StereoBotIK
 
 # Extended sync read: addr 56, 15 bytes covers position(2) + speed(2) + load(2) + voltage(1) + temp(1) + pad(5) + current(2)
-# But current is at addr 69 which is 56+13, so we need 15 bytes: 69-56+2 = 15
+# Current is at addr 69 which is 56+13, so we need 15 bytes: 69-56+2 = 15
 SYNC_READ_START = 56
 SYNC_READ_LEN = 15  # covers addr 56-70
 
 # Calibration file paths
-CAL_DIR = os.path.join(os.path.dirname(__file__), "..", "calibration")
-HOME_PATH = os.path.join(CAL_DIR, "home_position.json")
-RESTING_PATH = os.path.join(CAL_DIR, "resting_position.json")
+HOME_PATH = str(CALIBRATION_DIR / "home_position.json")
+RESTING_PATH = str(CALIBRATION_DIR / "resting_position.json")
 
 MODE_JOINT = 0
 MODE_CARTESIAN = 1
@@ -76,8 +72,9 @@ MODE_NAMES = ["JOINT", "CARTESIAN/IK", "PID TUNING"]
 
 PID_COEFF_NAMES = ["P", "D", "I"]
 PID_COEFF_ADDRS = [ADDR_P_COEFFICIENT, ADDR_D_COEFFICIENT, ADDR_I_COEFFICIENT]
-PID_FACTORY_DEFAULTS = (16, 32, 0)  # STS3215 factory P, D, I
 
+# Alias for ADDR_PRESENT_VELOCITY (previously named ADDR_PRESENT_SPEED locally)
+ADDR_PRESENT_SPEED = ADDR_PRESENT_VELOCITY
 
 
 def load_json(path: str) -> dict | None:
@@ -202,7 +199,7 @@ class DebugControlTUI:
     def _write_pid_coefficient(self, name: str, coeff_idx: int, value: int):
         """Write a single PID coefficient to EPROM for one motor.
 
-        EPROM write sequence: torque off → Lock=0 → write → Lock=1.
+        EPROM write sequence: torque off -> Lock=0 -> write -> Lock=1.
         Torque is re-enabled afterward if self.torque_on is True.
         """
         value = max(0, min(255, value))
@@ -230,7 +227,7 @@ class DebugControlTUI:
             # 5. Re-enable torque if it was on
             if self.torque_on:
                 pkt.write1ByteTxRx(ph, mid, ADDR_TORQUE_ENABLE, 1)
-            # 6. Flush rx buffer — EPROM writes can leave stale bytes
+            # 6. Flush rx buffer -- EPROM writes can leave stale bytes
             time.sleep(0.01)
             ph.ser.reset_input_buffer()
         finally:
@@ -955,7 +952,7 @@ class DebugControlTUI:
             self.servo.disconnect()
 
 
-def main(stdscr):
+def _curses_main(stdscr):
     curses.curs_set(0)
     stdscr.timeout(50)  # 20Hz loop
     curses.start_color()
@@ -965,8 +962,7 @@ def main(stdscr):
     curses.init_pair(3, curses.COLOR_CYAN, -1)
     curses.init_pair(4, curses.COLOR_RED, -1)
 
-    # Parse args outside curses (already parsed, passed via closure)
-    tui = main.tui
+    tui = _curses_main.tui
 
     try:
         tui.connect()
@@ -989,7 +985,7 @@ def main(stdscr):
         tui.disconnect()
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="StereoBot Debug Control TUI")
     parser.add_argument("--port", default="/dev/ttyACM0", help="Serial port")
     parser.add_argument("--baudrate", type=int, default=1_000_000, help="Baud rate")
@@ -998,5 +994,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     tui = DebugControlTUI(port=args.port, baudrate=args.baudrate, servo_time_profile=args.servo_profile)
-    main.tui = tui
-    curses.wrapper(main)
+    _curses_main.tui = tui
+    curses.wrapper(_curses_main)
+
+
+if __name__ == "__main__":
+    main()

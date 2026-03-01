@@ -1,0 +1,3 @@
+https://www.waveshare.com/wiki/ST3215_Servo
+https://github.com/ftservo/FTServo_Python/tree/main/scservo_sdk
+https://github.com/matthieuvigne/STS_servos

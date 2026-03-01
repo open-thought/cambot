@@ -7,12 +7,12 @@ via WebSocket, receives head orientation + position back, and drives the robot
 via full inverse kinematics.
 
 Usage:
-    python telehead.py                          # full mode
-    python telehead.py --no-robot               # camera streaming only
-    python telehead.py --no-camera              # robot control only (IK console output)
-    python telehead.py --no-robot --no-camera   # server only (for testing)
-    python telehead.py --save-home              # save current position as home and exit
-    python telehead.py --save-resting           # save current position as resting and exit
+    python -m cambot.teleop                     # full mode
+    python -m cambot.teleop --no-robot          # camera streaming only
+    python -m cambot.teleop --no-camera         # robot control only (IK console output)
+    python -m cambot.teleop --no-robot --no-camera   # server only (for testing)
+    python -m cambot.teleop --save-home         # save current position as home and exit
+    python -m cambot.teleop --save-resting      # save current position as resting and exit
 """
 
 import argparse
@@ -30,7 +30,8 @@ import time
 
 import numpy as np
 
-from robot_control import load_home_position
+from cambot import CALIBRATION_DIR
+from cambot.servo.controller import load_home_position
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ class TeleHead:
     def connect(self):
         """Connect to the robot and set up IK."""
         if self.use_robot:
-            from robot_control import StereoBotServo
+            from cambot.servo.controller import StereoBotServo
 
             # Use resting position as URDF zero reference so that joint angles
             # match the URDF convention and ikpy joint limits are correct.
@@ -149,7 +150,7 @@ class TeleHead:
             logger.info(f"Robot connected on {self.robot_port}")
 
         if self.use_ik:
-            from ik_solver import StereoBotIK, JOINT_NAMES
+            from cambot.teleop.ik_solver import StereoBotIK, JOINT_NAMES
             self.ik = StereoBotIK(position_scale=self.position_scale)
             logger.info(f"IK solver loaded ({self.ik.n_active} active joints)")
 
@@ -279,8 +280,8 @@ class TeleHead:
         Updates server.camera_capture and server.current_resolution on success.
         Returns True on success.
         """
-        import server as teleop_server
-        from zed_capture import create_capture
+        from cambot.teleop import server as teleop_server
+        from cambot.teleop.capture import create_capture
 
         fps_map = {"vga": 100, "720p": 60, "1080p": 30, "2k": 15}
         cam_fps = explicit_fps if explicit_fps is not None else fps_map.get(resolution, 60)
@@ -323,7 +324,7 @@ class TeleHead:
 
         Returns True on success.
         """
-        import server as teleop_server
+        from cambot.teleop import server as teleop_server
 
         if self._switching_resolution:
             logger.warning("Resolution switch already in progress")
@@ -374,7 +375,7 @@ class TeleHead:
 
     def control_loop(self):
         """Main IK control loop. Event-driven with rate_hz ceiling."""
-        from ik_solver import JOINT_NAMES
+        from cambot.servo.constants import JOINT_NAMES
 
         self._running = True
         dt = 1.0 / self.rate_hz
@@ -546,13 +547,12 @@ def main():
                         help="Path to resting_position.json")
     args = parser.parse_args()
 
-    cal_dir = os.path.join(os.path.dirname(__file__), "..", "calibration")
-    home_path = args.home or os.path.join(cal_dir, "home_position.json")
-    resting_path = args.resting or os.path.join(cal_dir, "resting_position.json")
+    home_path = args.home or str(CALIBRATION_DIR / "home_position.json")
+    resting_path = args.resting or str(CALIBRATION_DIR / "resting_position.json")
 
     # --- Save position modes ---
     if args.save_home or args.save_resting:
-        from robot_control import StereoBotServo, save_home_position
+        from cambot.servo.controller import StereoBotServo, save_home_position
         servo = StereoBotServo.connect(args.port)
         try:
             if args.save_home:
@@ -563,7 +563,7 @@ def main():
             servo.disconnect()
         return
 
-    import server as teleop_server
+    from cambot.teleop import server as teleop_server
 
     # --- TeleHead setup ---
     telehead = TeleHead(
@@ -693,7 +693,8 @@ def main():
 
     local_ip = teleop_server.get_local_ip()
 
-    cert_dir = os.path.dirname(os.path.abspath(__file__))
+    cert_dir = str(CALIBRATION_DIR)
+    os.makedirs(cert_dir, exist_ok=True)
     cert_file = os.path.join(cert_dir, "cert.pem")
     key_file = os.path.join(cert_dir, "key.pem")
     teleop_server.generate_self_signed_cert(cert_file, key_file, local_ip)
