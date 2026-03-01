@@ -1,12 +1,45 @@
 #!/usr/bin/env python3
-"""Read and display all registers from Feetech STS3215 servos."""
+"""Read and display all registers from Feetech STS3215 servos.
 
+Also supports writing individual registers:
+  python read_all_params.py --write MOTOR_ID ADDR VALUE [--size 1|2] [--eprom]
+
+Examples:
+  # Read all registers for all motors
+  python read_all_params.py
+
+  # Read registers for specific motors
+  python read_all_params.py --motors 1 2
+
+  # Write Overload_Torque (EPROM addr 36) to 100 for motor 1
+  python read_all_params.py --write 1 36 100 --eprom
+
+  # Write Overload_Torque=100 for all motors 1-5
+  python read_all_params.py --write 1,2,3,4,5 36 100 --eprom
+
+  # Write SRAM Torque_Limit (addr 48) to 900 for motor 1 (2 bytes)
+  python read_all_params.py --write 1 48 900 --size 2
+"""
+
+import argparse
 import sys
+import time
+
 import scservo_sdk as scs
 
-PORT = "/dev/ttyACM0"
-BAUDRATE = 1_000_000
+DEFAULT_PORT = "/dev/ttyACM0"
+DEFAULT_BAUDRATE = 1_000_000
 PROTOCOL_VERSION = 0
+
+ADDR_TORQUE_ENABLE = 40
+ADDR_LOCK = 55
+
+
+def flush_serial(port_handler):
+    """Flush stale data from the serial buffer."""
+    if hasattr(port_handler, 'ser') and port_handler.ser is not None:
+        port_handler.ser.reset_input_buffer()
+    time.sleep(0.02)
 
 MOTOR_NAMES = {
     1: "shoulder_pan",
@@ -87,19 +120,145 @@ FACTORY_REGISTERS = [
     ("Acceleration_Multiplier", 86, 1, "Accel multiplier (when accel=0)", None),
 ]
 
+# Build a lookup by address for register names
+ALL_REGISTERS = EPROM_REGISTERS + SRAM_REGISTERS + FACTORY_REGISTERS
+REGISTER_BY_ADDR = {addr: (name, size) for name, addr, size, _, _ in ALL_REGISTERS}
 
-def main():
-    port_handler = scs.PortHandler(PORT)
+# EPROM addresses (registers below addr 40)
+EPROM_ADDRS = {addr for _, addr, _, _, _ in EPROM_REGISTERS}
+
+
+def parse_motor_ids(s):
+    """Parse '1,2,3' or '1-5' or 'all' into a list of motor IDs."""
+    if s.lower() == "all":
+        return list(MOTOR_NAMES.keys())
+    ids = []
+    for part in s.split(","):
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            ids.extend(range(int(lo), int(hi) + 1))
+        else:
+            ids.append(int(part))
+    return ids
+
+
+def cmd_write(args):
+    """Write a value to a register on one or more motors."""
+    port_handler = scs.PortHandler(args.port)
     packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
     if not port_handler.openPort():
-        print(f"Failed to open {PORT}")
+        print(f"Failed to open {args.port}")
         sys.exit(1)
-    port_handler.setBaudRate(BAUDRATE)
+    port_handler.setBaudRate(args.baud)
 
-    motor_ids = list(MOTOR_NAMES.keys())
+    motor_ids = parse_motor_ids(args.write[0])
+    addr = int(args.write[1])
+    value = int(args.write[2])
+
+    # Determine register size
+    if args.size:
+        size = args.size
+    elif addr in REGISTER_BY_ADDR:
+        _, size = REGISTER_BY_ADDR[addr]
+    else:
+        size = 1
+
+    # Determine if EPROM
+    is_eprom = args.eprom or addr in EPROM_ADDRS
+
+    reg_name = REGISTER_BY_ADDR.get(addr, (f"addr_{addr}", size))[0]
+
+    print(f"Writing {reg_name} (addr {addr}, {size} byte{'s' if size > 1 else ''}"
+          f"{', EPROM' if is_eprom else ''}) = {value}")
+
+    # Safety check for ID register
+    if addr == 5:
+        print("ERROR: Use fix_servo_ids.py to change motor IDs, not this tool.")
+        port_handler.closePort()
+        sys.exit(1)
 
     for mid in motor_ids:
-        name = MOTOR_NAMES[mid]
+        # Ping first
+        flush_serial(port_handler)
+        _, result, _ = packet_handler.ping(port_handler, mid)
+        if result != scs.COMM_SUCCESS:
+            print(f"  Motor {mid}: NOT RESPONDING, skipping")
+            continue
+
+        # Read current value
+        flush_serial(port_handler)
+        if size == 1:
+            old_val, result, _ = packet_handler.read1ByteTxRx(port_handler, mid, addr)
+        else:
+            old_val, result, _ = packet_handler.read2ByteTxRx(port_handler, mid, addr)
+        if result != scs.COMM_SUCCESS:
+            old_str = "?"
+        else:
+            old_str = str(old_val)
+
+        if is_eprom:
+            # Disable torque and unlock EPROM
+            flush_serial(port_handler)
+            packet_handler.write1ByteTxRx(port_handler, mid, ADDR_TORQUE_ENABLE, 0)
+            time.sleep(0.05)
+            flush_serial(port_handler)
+            packet_handler.write1ByteTxRx(port_handler, mid, ADDR_LOCK, 0)
+            time.sleep(0.05)
+
+        # Write
+        flush_serial(port_handler)
+        if size == 1:
+            result, _ = packet_handler.write1ByteTxRx(port_handler, mid, addr, value)
+        else:
+            result, _ = packet_handler.write2ByteTxRx(port_handler, mid, addr, value)
+        time.sleep(0.05)
+
+        if result != scs.COMM_SUCCESS:
+            print(f"  Motor {mid}: WRITE FAILED ({packet_handler.getTxRxResult(result)})")
+            continue
+
+        if is_eprom:
+            # Re-lock EPROM
+            flush_serial(port_handler)
+            packet_handler.write1ByteTxRx(port_handler, mid, ADDR_LOCK, 1)
+            time.sleep(0.05)
+
+        # Read back to verify
+        flush_serial(port_handler)
+        if size == 1:
+            new_val, result, _ = packet_handler.read1ByteTxRx(port_handler, mid, addr)
+        else:
+            new_val, result, _ = packet_handler.read2ByteTxRx(port_handler, mid, addr)
+
+        if result == scs.COMM_SUCCESS and new_val == value:
+            name = MOTOR_NAMES.get(mid, "")
+            print(f"  Motor {mid}{' ('+name+')' if name else ''}: {old_str} -> {new_val}  OK")
+        elif result == scs.COMM_SUCCESS:
+            print(f"  Motor {mid}: wrote {value} but read back {new_val}  MISMATCH")
+        else:
+            print(f"  Motor {mid}: wrote {value}, read-back failed")
+
+    port_handler.closePort()
+
+
+def cmd_read(args):
+    """Read and display all registers."""
+    port_handler = scs.PortHandler(args.port)
+    packet_handler = scs.PacketHandler(PROTOCOL_VERSION)
+    if not port_handler.openPort():
+        print(f"Failed to open {args.port}")
+        sys.exit(1)
+    port_handler.setBaudRate(args.baud)
+
+    if args.motors:
+        motor_ids = []
+        for m in args.motors:
+            motor_ids.extend(parse_motor_ids(m))
+    else:
+        motor_ids = list(MOTOR_NAMES.keys())
+
+    for mid in motor_ids:
+        name = MOTOR_NAMES.get(mid, f"unknown_{mid}")
         print(f"\n{'='*70}")
         print(f"  Motor {mid}: {name}")
         print(f"{'='*70}")
@@ -136,7 +295,7 @@ def main():
     print(f"\n{'='*70}")
     print("  SUMMARY - Key Parameters")
     print(f"{'='*70}")
-    header = f"  {'Parameter':<25}" + "".join(f"{'M'+str(m)+' '+MOTOR_NAMES[m][:6]:>12}" for m in motor_ids)
+    header = f"  {'Parameter':<25}" + "".join(f"{'M'+str(m)+' '+MOTOR_NAMES.get(m,'?')[:6]:>12}" for m in motor_ids)
     print(header)
     print("  " + "-" * (25 + 12 * len(motor_ids)))
 
@@ -146,6 +305,8 @@ def main():
         ("D_Coefficient", 22, 1, None),
         ("I_Coefficient", 23, 1, None),
         ("Protection_Current", 28, 2, None),
+        ("Protective_Torque", 34, 1, None),
+        ("Protection_Time", 35, 1, None),
         ("Overload_Torque", 36, 1, None),
         ("Operating_Mode", 33, 1, None),
         ("Torque_Enable", 40, 1, None),
@@ -174,6 +335,41 @@ def main():
         print(row)
 
     port_handler.closePort()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Read/write Feetech STS3215 servo registers.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  %(prog)s                                   Read all motors
+  %(prog)s --motors 1 2                      Read motors 1 and 2 only
+  %(prog)s --write 1 36 100 --eprom          Set Overload_Torque=100 on motor 1
+  %(prog)s --write 1-5 36 100 --eprom        Set Overload_Torque=100 on motors 1-5
+  %(prog)s --write all 36 100 --eprom        Set Overload_Torque=100 on all motors
+  %(prog)s --write 1 48 900 --size 2         Set SRAM Torque_Limit=900 on motor 1
+""",
+    )
+    parser.add_argument("--port", default=DEFAULT_PORT,
+                        help=f"serial port (default: {DEFAULT_PORT})")
+    parser.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE,
+                        help=f"baud rate (default: {DEFAULT_BAUDRATE})")
+    parser.add_argument("--motors", nargs="+",
+                        help="motor IDs to read (default: all 1-6)")
+    parser.add_argument("--write", nargs=3, metavar=("MOTORS", "ADDR", "VALUE"),
+                        help="write VALUE to register ADDR on MOTORS (e.g. '1,2,3' or '1-5' or 'all')")
+    parser.add_argument("--size", type=int, choices=[1, 2],
+                        help="register size in bytes (auto-detected if known)")
+    parser.add_argument("--eprom", action="store_true",
+                        help="force EPROM unlock/lock sequence (auto-detected for known registers)")
+
+    args = parser.parse_args()
+
+    if args.write:
+        cmd_write(args)
+    else:
+        cmd_read(args)
 
 
 if __name__ == "__main__":

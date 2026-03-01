@@ -35,6 +35,13 @@ camera_capture = None
 # TeleHead reference (set by telehead.py after construction)
 telehead_ref = None
 
+# Shared frame event — survives capture object swaps during resolution switches
+frame_ready_event: asyncio.Event | None = None
+current_resolution: str = "720p"
+
+# Valid resolution strings
+VALID_RESOLUTIONS = {"vga", "720p", "1080p", "2k"}
+
 # Frame header: magic(2) + header_len(2) + seq(4) + capture_ts(8) = 16 bytes
 _FRAME_MAGIC = 0x5342  # 'SB'
 _FRAME_HEADER_LEN = 16
@@ -68,6 +75,13 @@ def on_head_pose(callback):
     head_pose_callbacks.append(callback)
 
 
+def init_frame_event(loop: asyncio.AbstractEventLoop) -> asyncio.Event:
+    """Create the shared frame-ready event on the async loop."""
+    global frame_ready_event
+    frame_ready_event = asyncio.Event()
+    return frame_ready_event
+
+
 def _robot_state_msg(th) -> dict:
     """Build a robot_state message from the telehead instance."""
     calibrated = (
@@ -86,11 +100,16 @@ async def _ping_loop(ws, state):
     seq = 0
     try:
         while not ws.closed:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(0.5)
             if ws.closed:
                 break
             seq += 1
             server_ts = time.monotonic()
+            # Expire old pings that never got a pong (avoid memory leak)
+            stale = [s for s, ts in state['pending_pings'].items()
+                     if server_ts - ts > 10.0]
+            for s in stale:
+                state['pending_pings'].pop(s, None)
             state['pending_pings'][seq] = server_ts
             try:
                 await ws.send_str(json.dumps({
@@ -127,6 +146,12 @@ async def _telemetry_loop(ws, state):
                 },
             }
 
+            # Add camera info
+            msg['camera'] = {
+                'resolution': current_resolution,
+                'available': camera_capture is not None,
+            }
+
             # Add control loop telemetry and robot state if available
             th = telehead_ref
             if th is not None:
@@ -153,26 +178,36 @@ async def _telemetry_loop(ws, state):
 
 
 async def _frame_send_loop(ws, state):
-    """Send video frames with time-based dropping."""
-    cap = camera_capture
-    frame_event = getattr(cap, 'frame_event', None) if cap is not None else None
+    """Send video frames with RTT-based backpressure.
+
+    Uses measured RTT (from ping/pong on the same WebSocket) to detect
+    bufferbloat.  When RTT exceeds RTT_TARGET, frames are skipped to let
+    the TCP send buffer drain.  This prevents the multi-second queue
+    build-up that occurs when the server pushes frames faster than the
+    uplink can deliver them.
+    """
+    RTT_TARGET = 500.0   # ms — desired max RTT (cellular can be 200-500ms)
+    RTT_CRITICAL = 2000.0  # ms — true bufferbloat, hard-pause
+    MIN_BUDGET = 1.0 / 60
+    MAX_BUDGET = 0.250   # don't go slower than 4 fps
 
     frame_seq = 0
     last_sent_id = None
     last_send_complete = 0.0
-    frame_budget = 1.0 / 60  # start at 60fps budget
+    frame_budget = MIN_BUDGET
     fps_count = 0
     fps_start = time.monotonic()
 
     try:
         while not ws.closed:
-            # Wait for new frame (event-driven) or poll
-            if frame_event is not None:
+            # Use shared event (survives capture swaps) or poll
+            evt = frame_ready_event
+            if evt is not None:
                 try:
-                    await asyncio.wait_for(frame_event.wait(), timeout=0.1)
+                    await asyncio.wait_for(evt.wait(), timeout=0.1)
                 except asyncio.TimeoutError:
                     continue
-                frame_event.clear()
+                evt.clear()
             else:
                 await asyncio.sleep(0.002)
 
@@ -188,6 +223,23 @@ async def _frame_send_loop(ws, state):
 
             now = time.monotonic()
 
+            # RTT-based backpressure
+            rtt = state['rtt_ms']
+            if rtt > RTT_CRITICAL:
+                # True bufferbloat — brief pause to drain
+                state['drop_count'] += 1
+                await asyncio.sleep(0.25)
+                continue
+
+            # Adjust frame budget based on RTT
+            if rtt > RTT_TARGET:
+                # Back off proportional to overshoot
+                overshoot = rtt / RTT_TARGET
+                frame_budget = min(frame_budget * (1.0 + 0.2 * overshoot), MAX_BUDGET)
+            elif rtt > 0:
+                # RTT is good — gradually speed up
+                frame_budget = max(frame_budget * 0.95, MIN_BUDGET)
+
             # Time-based dropping: skip frame if we're still within budget
             if last_send_complete > 0 and (now - last_send_complete) < frame_budget:
                 state['drop_count'] += 1
@@ -199,7 +251,7 @@ async def _frame_send_loop(ws, state):
 
             send_start = time.monotonic()
             try:
-                await asyncio.wait_for(ws.send_bytes(payload), timeout=0.1)
+                await asyncio.wait_for(ws.send_bytes(payload), timeout=0.2)
             except asyncio.TimeoutError:
                 state['drop_count'] += 1
                 continue
@@ -211,13 +263,9 @@ async def _frame_send_loop(ws, state):
             last_send_complete = send_end
             send_duration = send_end - send_start
 
-            # Adaptive frame budget
+            # Local send time backpressure (catches OS buffer saturation too)
             if send_duration > 0.040:
-                # Slow send: increase budget (back off)
-                frame_budget = min(frame_budget * 1.5, 0.100)
-            else:
-                # Fast send: decrease budget (speed up)
-                frame_budget = max(frame_budget * 0.9, 1.0 / 60)
+                frame_budget = min(frame_budget * 1.5, MAX_BUDGET)
 
             # Update telemetry state
             state['frame_count'] += 1
@@ -297,16 +345,41 @@ async def websocket_stream(request):
                                             _robot_state_msg(th)))
                                     except Exception:
                                         pass
+                            if action == "set_resolution":
+                                resolution = data.get("resolution", "")
+                                if resolution in VALID_RESOLUTIONS:
+                                    await broadcast(json.dumps({
+                                        'type': 'resolution_switching',
+                                        'resolution': resolution,
+                                    }))
+                                    th = telehead_ref
+                                    if th is not None:
+                                        loop = asyncio.get_event_loop()
+                                        success = await loop.run_in_executor(
+                                            None, th.switch_resolution, resolution)
+                                        if success:
+                                            await broadcast(json.dumps({
+                                                'type': 'resolution_changed',
+                                                'resolution': current_resolution,
+                                            }))
+                                        else:
+                                            await broadcast(json.dumps({
+                                                'type': 'resolution_changed',
+                                                'resolution': current_resolution,
+                                                'error': True,
+                                            }))
                         elif msg_type == "pong":
                             # Compute RTT from ping response
                             seq = data.get('seq', 0)
                             sent_ts = state['pending_pings'].pop(seq, None)
                             if sent_ts is not None:
                                 rtt = (time.monotonic() - sent_ts) * 1000
-                                alpha = 0.3
+                                # Asymmetric EMA: fast react to improvement, slow to spike
+                                # This prevents a single bad ping from killing throughput
                                 if state['rtt_ms'] == 0:
                                     state['rtt_ms'] = rtt
                                 else:
+                                    alpha = 0.5 if rtt < state['rtt_ms'] else 0.2
                                     state['rtt_ms'] += alpha * (rtt - state['rtt_ms'])
                         elif msg_type == "settings_sync":
                             await broadcast(msg.data, exclude=ws)
