@@ -270,6 +270,48 @@ class TeleHead:
             self._moving_to_position = False
         return True
 
+    def pause(self):
+        """Signal headset removed — trigger watchdog return-to-home immediately."""
+        if self._last_pose_time > 0:
+            self._last_pose_time = time.monotonic() - self.watchdog_timeout - 1.0
+            logger.info("Pause: headset removed, watchdog will trigger immediately")
+
+    def resume(self):
+        """Signal headset back on. Next on_head_pose() naturally clears watchdog."""
+        logger.info("Resume: waiting for VR pose data")
+
+    def calibrate_soft(self) -> bool:
+        """Instant recalibration: current servo position becomes new home,
+        current VR pose becomes new neutral. No servo movement."""
+        if self.ik is None:
+            return False
+        with self._lock:
+            pose = self._latest_pose
+        if pose is None:
+            return False
+
+        if self.servo and self.servo.is_connected:
+            current_q = self.servo.read_joint_angles()
+        elif self._smoothed_q is not None:
+            current_q = self._smoothed_q.copy()
+        else:
+            return False
+
+        q_vr = pose.get("q")
+        p_vr = pose.get("p", {"x": 0, "y": 0, "z": 0})
+        if q_vr is None:
+            return False
+
+        self._moving_to_position = True  # brief gate
+        try:
+            self.ik.set_home(current_q)
+            self._smoothed_q = current_q.copy()
+            self.ik.calibrate_neutral_vr(q_vr, p_vr)
+        finally:
+            self._moving_to_position = False
+        logger.info("Soft recalibration complete (no movement)")
+        return True
+
     def on_head_pose(self, pose: dict):
         """Callback for new head pose data from the server."""
         now = time.monotonic()
@@ -749,6 +791,8 @@ def main():
                         else:
                             print("  >>> No head pose data yet. Connect Quest first.")
                     elif line == "p":
+                        if telehead.position_tracking:
+                            telehead.calibrate_soft()
                         telehead.position_tracking = not telehead.position_tracking
                         state = "ON" if telehead.position_tracking else "OFF"
                         print(f"  >>> Position tracking: {state}")

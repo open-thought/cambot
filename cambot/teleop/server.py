@@ -387,7 +387,25 @@ async def websocket_stream(request):
                                         except Exception:
                                             pass
                                     asyncio.ensure_future(_do_calibrate(th, ws))
+                                elif action == "pause":
+                                    th.pause()
+                                elif action == "resume":
+                                    th.resume()
+                                elif action == "recalibrate":
+                                    async def _do_recalibrate(th, ws):
+                                        loop = asyncio.get_event_loop()
+                                        await loop.run_in_executor(
+                                            None, th.calibrate_soft)
+                                        try:
+                                            await ws.send_str(json.dumps(
+                                                _robot_state_msg(th)))
+                                        except Exception:
+                                            pass
+                                    asyncio.ensure_future(
+                                        _do_recalibrate(th, ws))
                                 elif action == "toggle_position":
+                                    if th.position_tracking:
+                                        th.calibrate_soft()
                                     th.position_tracking = not th.position_tracking
                                     try:
                                         await ws.send_str(json.dumps(

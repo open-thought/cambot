@@ -719,6 +719,17 @@
         console.warn('VR button unavailable:', e.message);
     }
 
+    // Headset-off detection: pause robot when XR session ends or page hidden
+    renderer.xr.addEventListener('sessionend', () => {
+        sendCommand('pause');
+    });
+    renderer.xr.addEventListener('sessionstart', () => {
+        sendCommand('resume');
+    });
+    document.addEventListener('visibilitychange', () => {
+        sendCommand(document.hidden ? 'pause' : 'resume');
+    });
+
     // --- Texture ---
     const texture = new THREE.CanvasTexture(drawCanvas);
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -958,14 +969,14 @@
             if (btns.length < 6) continue;
             const hand = source.handedness || 'none';
 
-            // A/X button (index 4) = Calibrate
+            // A/X button (index 4) = Calibrate (soft if already calibrated)
             const pk = hand + '_4';
             const primaryPressed = btns[4].pressed;
             if (primaryPressed && !prevButtons[pk] && !robotState.calibrating) {
                 robotState.calibrating = true;
                 hudDirty = true;
                 updateRobotUI();
-                sendCommand('calibrate');
+                sendCommand(robotState.calibrated ? 'recalibrate' : 'calibrate');
             }
             prevButtons[pk] = primaryPressed;
 
@@ -1330,7 +1341,7 @@
         if (robotState.calibrating) return;
         robotState.calibrating = true;
         updateRobotUI();
-        sendCommand('calibrate');
+        sendCommand(robotState.calibrated ? 'recalibrate' : 'calibrate');
     });
     positionBtn.addEventListener('click', () => {
         sendCommand('toggle_position');
