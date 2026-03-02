@@ -46,6 +46,10 @@ telehead_ref = None
 frame_ready_event: asyncio.Event | None = None
 current_resolution: str = "720p"
 
+# Track video-streaming clients for camera demand signaling
+_video_clients: set = set()
+_camera_demand_active: bool = False
+
 # WebRTC manager (initialized via init_webrtc())
 webrtc_manager: WebRTCManager | None = None
 
@@ -116,6 +120,22 @@ def init_webrtc() -> bool:
     return True
 
 
+def update_camera_demand():
+    """Signal camera to capture or idle based on connected video clients."""
+    global _camera_demand_active
+    cap = camera_capture
+    if cap is None or not hasattr(cap, 'set_demand'):
+        return
+    active = len(_video_clients) > 0
+    cap.set_demand(active)
+    if active != _camera_demand_active:
+        _camera_demand_active = active
+        if active:
+            logger.info(f"Camera: active ({len(_video_clients)} video client(s))")
+        else:
+            logger.info("Camera: idle (no video clients)")
+
+
 def _robot_state_msg(th) -> dict:
     """Build a robot_state message from the telehead instance."""
     calibrated = (
@@ -126,6 +146,7 @@ def _robot_state_msg(th) -> dict:
         'type': 'robot_state',
         'calibrated': calibrated,
         'position_tracking': th.position_tracking,
+        'user_paused': th.user_paused,
     }
 
 
@@ -201,6 +222,7 @@ async def _telemetry_loop(ws, state):
                     msg['robot'] = {
                         'calibrated': t.get('calibrated', False),
                         'position_tracking': t.get('position_tracking', False),
+                        'user_paused': t.get('user_paused', False),
                     }
                 except Exception:
                     pass
@@ -236,8 +258,8 @@ async def _frame_send_loop(ws, state):
 
     try:
         while not ws.closed:
-            # Skip JPEG frames when WebRTC is actively streaming
-            if state.get('webrtc_active'):
+            # Skip frames when WebRTC is streaming or headset is off
+            if state.get('webrtc_active') or state.get('video_paused'):
                 await asyncio.sleep(0.5)
                 continue
 
@@ -338,6 +360,10 @@ async def websocket_stream(request):
 
     async with connected_ws_lock:
         connected_ws.add(ws)
+        if send_video:
+            _video_clients.add(ws)
+    if send_video:
+        update_camera_demand()
 
     ws_id = id(ws)
 
@@ -351,6 +377,7 @@ async def websocket_stream(request):
         'rtt_ms': 0.0,
         'pending_pings': {},
         'webrtc_active': False,
+        'video_paused': False,  # headset off — skip video to save bandwidth/CPU
     }
 
     # Receive loop for head pose, settings, and pong responses
@@ -389,8 +416,10 @@ async def websocket_stream(request):
                                     asyncio.ensure_future(_do_calibrate(th, ws))
                                 elif action == "pause":
                                     th.pause()
+                                    state['video_paused'] = True
                                 elif action == "resume":
                                     th.resume()
+                                    state['video_paused'] = False
                                 elif action == "recalibrate":
                                     async def _do_recalibrate(th, ws):
                                         loop = asyncio.get_event_loop()
@@ -405,6 +434,13 @@ async def websocket_stream(request):
                                         _do_recalibrate(th, ws))
                                 elif action == "toggle_position":
                                     th.toggle_position_tracking()
+                                    try:
+                                        await ws.send_str(json.dumps(
+                                            _robot_state_msg(th)))
+                                    except Exception:
+                                        pass
+                                elif action == "toggle_pause":
+                                    th.toggle_user_pause()
                                     try:
                                         await ws.send_str(json.dumps(
                                             _robot_state_msg(th)))
@@ -451,7 +487,8 @@ async def websocket_stream(request):
                         elif msg_type == "webrtc_offer" and webrtc_manager is not None:
                             try:
                                 answer = await webrtc_manager.handle_offer(
-                                    ws_id, data["sdp"], data.get("sdp_type", "offer"))
+                                    ws_id, data["sdp"], data.get("sdp_type", "offer"),
+                                    paused_getter=lambda: state['video_paused'])
                                 # Don't set webrtc_active here — wait for
                                 # client to confirm via webrtc_status message
                                 await ws.send_str(json.dumps({
@@ -503,6 +540,8 @@ async def websocket_stream(request):
             await webrtc_manager.close_peer(ws_id)
         async with connected_ws_lock:
             connected_ws.discard(ws)
+            _video_clients.discard(ws)
+        update_camera_demand()
 
     logger.info("Client disconnected")
     return ws

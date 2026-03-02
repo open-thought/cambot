@@ -63,6 +63,9 @@ class ZedMiniCapture:
         self._frame_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
+        # Demand tracking: when cleared, capture loop idles to save CPU
+        self._demand = threading.Event()
+
     def open(self) -> bool:
         """Open the ZED camera. Returns True on success."""
         err = self.zed.open(self.init_params)
@@ -107,12 +110,22 @@ class ZedMiniCapture:
         _, jpeg = cv2.imencode('.jpg', buf, self._encode_params)
         return jpeg.tobytes()
 
+    def set_demand(self, active: bool) -> None:
+        """Signal whether any consumer needs frames."""
+        if active:
+            self._demand.set()
+        else:
+            self._demand.clear()
+
     def capture_loop(self) -> None:
         """Continuous capture loop. Stores latest frame for streaming.
 
         Run this in a daemon thread.
         """
         while self._opened:
+            # Idle when no consumers need frames (saves ~1 CPU core)
+            if not self._demand.wait(timeout=0.5):
+                continue
             jpeg = self.grab_stereo_jpeg()
             if jpeg is not None:
                 ts = time.monotonic()
@@ -210,6 +223,9 @@ class FallbackCapture:
         self._frame_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
+        # Demand tracking: when cleared, capture loop idles to save CPU
+        self._demand = threading.Event()
+
     def open(self) -> bool:
         """Open the camera."""
         self._cap = cv2.VideoCapture(self._camera_index)
@@ -248,9 +264,19 @@ class FallbackCapture:
         _, jpeg = cv2.imencode('.jpg', frame, self._encode_params)
         return jpeg.tobytes(), frame
 
+    def set_demand(self, active: bool) -> None:
+        """Signal whether any consumer needs frames."""
+        if active:
+            self._demand.set()
+        else:
+            self._demand.clear()
+
     def capture_loop(self) -> None:
         """Continuous capture loop."""
         while self._opened:
+            # Idle when no consumers need frames (saves CPU)
+            if not self._demand.wait(timeout=0.5):
+                continue
             if self._cap is not None:
                 ret, frame = self._cap.read()
                 if ret:

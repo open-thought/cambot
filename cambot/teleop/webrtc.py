@@ -50,39 +50,79 @@ class CameraStreamTrack(MediaStreamTrack):
 
     kind = "video"
 
-    def __init__(self, frame_getter: Callable[[], np.ndarray | None], fps: int = 30):
+    # Maximum clock drift before resetting timing (seconds).  Prevents the
+    # burst-catch-up problem where the encoder is flooded after any pause.
+    MAX_DRIFT = 0.5
+
+    def __init__(self, frame_getter: Callable[[], np.ndarray | None],
+                 paused_getter: Callable[[], bool] | None = None,
+                 fps: int = 30):
         super().__init__()
         self._frame_getter = frame_getter
+        self._paused_getter = paused_getter
         self._fps = fps
         self._frame_count = 0
         self._null_count = 0
-        self._start: float | None = None
+        self._drift_resets = 0
         self._pts = 0
         self._pts_increment = VIDEO_CLOCK_RATE // fps  # e.g. 3000 for 30fps
         self._time_base = Fraction(1, VIDEO_CLOCK_RATE)
+        self._next_time: float = 0.0  # monotonic time for next frame
+        self._interval = 1.0 / fps
+        self._last_recv_time: float = 0.0  # for measuring actual delivery rate
+        self._last_frame: np.ndarray | None = None  # reuse when paused
 
     async def recv(self) -> VideoFrame:
-        # Self-pacing: sleep until next frame time
-        if self._start is None:
-            self._start = time.time()
+        # When video is paused (headset off), throttle to ~1fps with last frame
+        # to keep the WebRTC connection alive without wasting CPU on encoding.
+        paused = self._paused_getter() if self._paused_getter else False
+        if paused:
+            await asyncio.sleep(1.0)
+            self._pts += self._pts_increment * self._fps  # advance PTS by ~1s
+            self._next_time = 0.0  # reset timing for clean resume
+            frame = self._last_frame
+            if frame is None:
+                frame = np.zeros((720, 2560, 3), dtype=np.uint8)
+            video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
+            video_frame.pts = self._pts
+            video_frame.time_base = self._time_base
+            return video_frame
+
+        now = time.monotonic()
+
+        if self._next_time == 0.0:
+            # First frame — deliver immediately
+            self._next_time = now + self._interval
         else:
-            self._pts += self._pts_increment
-            target = self._start + self._pts / VIDEO_CLOCK_RATE
-            wait = target - time.time()
-            if wait > 0:
+            wait = self._next_time - now
+            if wait < -self.MAX_DRIFT:
+                # Clock drifted too far (event loop was busy / encoding stall).
+                # Reset timing to avoid burst catch-up that floods the encoder.
+                self._drift_resets += 1
+                self._next_time = now + self._interval
+            elif wait > 0:
                 await asyncio.sleep(wait)
+            self._next_time += self._interval
+
+        self._pts += self._pts_increment
 
         frame = self._frame_getter()
         if frame is None:
             self._null_count += 1
             frame = np.zeros((720, 2560, 3), dtype=np.uint8)
+        self._last_frame = frame
 
         self._frame_count += 1
-        if self._frame_count <= 3 or self._frame_count % 150 == 0:
+
+        # Periodic logging: first 5 frames, then every 150 frames (~5s at 30fps)
+        if self._frame_count <= 5 or self._frame_count % 150 == 0:
+            dt = (now - self._last_recv_time) * 1000 if self._last_recv_time > 0 else 0
             logger.info(
                 f"WebRTC track: frame={self._frame_count} "
-                f"shape={frame.shape} null={self._null_count}"
+                f"shape={frame.shape} dt={dt:.0f}ms "
+                f"null={self._null_count} drift_resets={self._drift_resets}"
             )
+        self._last_recv_time = now
 
         video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
         video_frame.pts = self._pts
@@ -120,11 +160,15 @@ class WebRTCManager:
         self.on_connection_state: Callable[[int, bool], None] | None = None
 
     async def handle_offer(
-        self, ws_id: int, sdp: str, sdp_type: str = "offer"
+        self, ws_id: int, sdp: str, sdp_type: str = "offer",
+        paused_getter: Callable[[], bool] | None = None,
     ) -> dict:
         """Process a WebRTC offer and return an answer SDP."""
-        # Close any existing peer for this client
-        await self.close_peer(ws_id)
+        # Close ALL existing peers — not just for this ws_id.  When a browser
+        # tab refreshes, the old WebSocket (different ws_id) may still be open
+        # until the heartbeat timeout, leaving a stale encoder running.
+        # Only one viewer is supported, so close everything.
+        await self.close_all()
 
         config = RTCConfiguration(iceServers=[
             RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
@@ -133,7 +177,11 @@ class WebRTCManager:
         self._peers[ws_id] = pc
 
         # Create a fresh track for this peer
-        track = CameraStreamTrack(self._frame_getter, self._fps)
+        track = CameraStreamTrack(
+            self._frame_getter,
+            paused_getter=paused_getter,
+            fps=self._fps,
+        )
         pc.addTrack(track)
 
         @pc.on("connectionstatechange")

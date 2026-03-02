@@ -117,6 +117,7 @@ class TeleHead:
         self._running = False
         self._moving_to_position = False
         self.position_tracking = False
+        self.user_paused = False
 
         # Smoothed joint angles (radians)
         self._smoothed_q: dict[str, float] | None = None
@@ -134,6 +135,8 @@ class TeleHead:
         # Watchdog: track last pose timestamp for timeout detection
         self._last_pose_time: float = 0.0
         self._watchdog_active: bool = False
+        # Physical home position for watchdog return (set once, never recalibrated)
+        self._watchdog_home_q: dict[str, float] | None = None
 
         # Telemetry (updated by control loop, read by server)
         self._telemetry = {
@@ -187,6 +190,8 @@ class TeleHead:
 
             self.ik.set_home(home)
             self._smoothed_q = home.copy()
+            if self._watchdog_home_q is None:
+                self._watchdog_home_q = home.copy()
 
     def _move_to_named_position(self, filepath: str, label: str, duration: float = 2.0) -> bool:
         """Load a named position from JSON and move there smoothly.
@@ -335,6 +340,22 @@ class TeleHead:
             self._moving_to_position = False
         logger.info(f"Position tracking: {'ON' if self.position_tracking else 'OFF'}")
 
+    def toggle_user_pause(self):
+        """Toggle user-initiated pause (lock robot in place).
+
+        When pausing: freezes the robot at its current position.
+        When unpausing: performs soft recalibration so the robot resumes
+        from the current position without jumping.
+        """
+        if self.user_paused:
+            # Unpausing — soft recalibrate before resuming
+            self.calibrate_soft()
+            self.user_paused = False
+            logger.info("User pause OFF — soft recalibrated, resuming control")
+        else:
+            self.user_paused = True
+            logger.info("User pause ON — robot locked in place")
+
     def on_head_pose(self, pose: dict):
         """Callback for new head pose data from the server."""
         now = time.monotonic()
@@ -353,6 +374,7 @@ class TeleHead:
         )
         t['position_tracking'] = self.position_tracking
         t['watchdog_active'] = self._watchdog_active
+        t['user_paused'] = self.user_paused
         return t
 
     def _create_and_start_camera(self, resolution: str, use_zed: bool,
@@ -389,6 +411,7 @@ class TeleHead:
 
         teleop_server.camera_capture = cap
         teleop_server.current_resolution = resolution
+        teleop_server.update_camera_demand()
 
         self._cam_thread = threading.Thread(target=cap.capture_loop, daemon=True)
         self._cam_thread.start()
@@ -462,6 +485,10 @@ class TeleHead:
         self._running = True
         dt = 1.0 / self.rate_hz
         max_dq = self.max_joint_velocity * dt  # max change per tick
+        # Watchdog return: fixed 1.0 rad/s (~57 deg/s) with exponential decel
+        watchdog_return_speed = 1.0  # rad/s — visibly smooth over ~1.5s
+        watchdog_max_dq = watchdog_return_speed * dt
+        watchdog_approach_alpha = 0.03  # per tick → proportional decel near home
 
         # Timing stats (updated every 5 seconds)
         _t_ik_sum = 0.0
@@ -473,8 +500,11 @@ class TeleHead:
         logger.info(f"Control loop started (max {self.rate_hz}Hz, event-driven)")
 
         while self._running:
-            # Wait for new pose data OR timeout at rate_hz ceiling
-            self._pose_event.wait(timeout=dt)
+            # Adaptive wait: idle longer when no VR data has been received
+            if self._last_pose_time == 0:
+                self._pose_event.wait(timeout=1.0)
+            else:
+                self._pose_event.wait(timeout=dt)
             self._pose_event.clear()
 
             loop_start = time.monotonic()
@@ -482,16 +512,17 @@ class TeleHead:
             with self._lock:
                 pose = self._latest_pose
 
-            if self._moving_to_position:
+            if self._moving_to_position or self.user_paused:
                 continue
 
             # Pose watchdog: if no VR pose received for watchdog_timeout seconds,
             # smoothly return toward home position to prevent unsafe drift.
+            # Uses _watchdog_home_q (the physical home from startup) rather than
+            # ik._home_joint_angles which gets overwritten by recalibration.
             if (self.watchdog_timeout > 0
                     and self._last_pose_time > 0
                     and self._smoothed_q is not None
-                    and self.ik is not None
-                    and self.ik._home_joint_angles is not None):
+                    and self._watchdog_home_q is not None):
                 pose_age = loop_start - self._last_pose_time
                 if pose_age > self.watchdog_timeout:
                     if not self._watchdog_active:
@@ -499,19 +530,31 @@ class TeleHead:
                             f"Pose watchdog triggered ({pose_age:.1f}s without VR data) "
                             f"— returning to home")
                         self._watchdog_active = True
-                    # Blend toward home at the same velocity-limited rate
-                    home_q = self.ik._home_joint_angles
+                    # Blend toward physical home with proportional deceleration:
+                    # moves at watchdog_return_speed initially, then smoothly
+                    # decelerates as it approaches home (exponential decay).
+                    home_q = self._watchdog_home_q
                     new_q = {}
+                    at_home = True
                     for name in JOINT_NAMES:
                         current_val = self._smoothed_q.get(name, 0.0)
                         home_val = home_q.get(name, 0.0)
                         delta = home_val - current_val
-                        if abs(delta) > max_dq:
-                            delta = math.copysign(max_dq, delta)
-                        new_q[name] = current_val + delta
+                        if abs(delta) > 0.001:
+                            at_home = False
+                        # Proportional step for smooth deceleration
+                        step = delta * watchdog_approach_alpha
+                        # Clamp to max return speed for safety
+                        if abs(step) > watchdog_max_dq:
+                            step = math.copysign(watchdog_max_dq, delta)
+                        new_q[name] = current_val + step
                     self._smoothed_q = new_q
-                    if self.servo and self.servo.is_connected:
+                    if not at_home and self.servo and self.servo.is_connected:
                         self.servo.write_joint_angles(new_q)
+                    if at_home:
+                        # Already at home — idle until new VR data
+                        self._pose_event.wait(timeout=0.5)
+                        self._pose_event.clear()
                     continue
                 elif self._watchdog_active:
                     # Headset back on: recalibrate so robot starts from
@@ -796,8 +839,8 @@ def main():
             actual_home = telehead.servo.read_joint_angles()
             telehead.ik.set_home(actual_home)
             telehead._smoothed_q = actual_home.copy()
+            telehead._watchdog_home_q = actual_home.copy()
             logger.info(f"IK home set from actual servo position: {actual_home}")
-            logger.info(f"IK home updated to actual servo position")
     control_thread = threading.Thread(target=telehead.control_loop, daemon=True)
     control_thread.start()
 
@@ -813,13 +856,17 @@ def main():
                     line = line.strip().lower()
                     if line == "" or line == "c":
                         if telehead.calibrate_neutral():
-                            print("  >>> Neutral position calibrated. Move your head to control.")
+                            print("  >>> Homed. Move your head to control.")
                         else:
                             print("  >>> No head pose data yet. Connect Quest first.")
                     elif line == "p":
                         telehead.toggle_position_tracking()
                         state = "ON" if telehead.position_tracking else "OFF"
                         print(f"  >>> Position tracking: {state}")
+                    elif line == "l":
+                        telehead.toggle_user_pause()
+                        state = "LOCKED" if telehead.user_paused else "UNLOCKED"
+                        print(f"  >>> Robot: {state}")
             except (EOFError, KeyboardInterrupt):
                 break
 
@@ -877,8 +924,9 @@ def main():
     print(f"  Safety: {', '.join(safety_parts) if safety_parts else 'defaults'}")
     print()
     print("  Open the URL on Quest 3, enter VR, then:")
-    print("  Press ENTER to calibrate neutral head position.")
+    print("  Press ENTER to home (capture neutral head position).")
     print("  Press P+ENTER to toggle position tracking (default: OFF).")
+    print("  Press L+ENTER to lock/unlock robot (pause control).")
     print("  Press Ctrl+C to quit.")
     print("=" * 60 + "\n")
 

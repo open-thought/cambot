@@ -156,8 +156,9 @@
     <div id="controls">
         <button id="startBtn">Start Stream</button>
         <button id="stopBtn" disabled>Stop</button>
-        <button id="calibrateBtn" disabled>Calibrate</button>
+        <button id="calibrateBtn" disabled>Home</button>
         <button id="positionBtn" disabled>Position: OFF</button>
+        <button id="pauseBtn" disabled>Pause</button>
         <button id="settingsBtn">Settings</button>
         <span id="status" class="disconnected">Disconnected</span>
     </div>
@@ -184,13 +185,14 @@
 
     const calibrateBtn = document.getElementById('calibrateBtn');
     const positionBtn = document.getElementById('positionBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
 
     let ws = null;
     let frameCount = 0;
     let lastFpsTime = performance.now();
 
     // Robot state from server
-    const robotState = { calibrated: false, position_tracking: false, calibrating: false };
+    const robotState = { calibrated: false, position_tracking: false, calibrating: false, user_paused: false };
     let hudDirty = true;
 
     // Resolution state
@@ -212,7 +214,6 @@
     const webrtcStats = { bps: 0, fps: 0, codec: '' };
     let _prevBytes = 0;
     let _prevStatsTime = 0;
-
     // VR HUD visibility
     let hudVisible = true;
 
@@ -364,7 +365,7 @@
                     }
                     _prevBytes = bytes;
                     _prevStatsTime = now;
-                    if (report.framesPerSecond) {
+                    if (report.framesPerSecond !== undefined) {
                         webrtcStats.fps = report.framesPerSecond;
                     }
                 }
@@ -453,6 +454,18 @@
         const video = webrtcVideoEl;
         if (!video || video.videoWidth === 0) return;
 
+        // Require a real video resolution before activating.  Some browsers
+        // (Quest 3) fire onloadeddata with a tiny placeholder (e.g. 2x2)
+        // before actual frames arrive.  If we switch away from JPEG now,
+        // and real frames never come, we're stuck at 0 fps.
+        if (video.videoWidth < 100 || video.videoHeight < 100) {
+            console.warn('WebRTC video too small:', video.videoWidth, 'x', video.videoHeight,
+                         '— waiting for real frames');
+            // Re-check in 500ms
+            setTimeout(() => activateWebRTCTexture(), 500);
+            return;
+        }
+
         // Resize canvas to match WebRTC video dimensions
         if (drawCanvas.width !== video.videoWidth || drawCanvas.height !== video.videoHeight) {
             drawCanvas.width = video.videoWidth;
@@ -513,10 +526,17 @@
             video.srcObject = ev.streams[0];
             video.play().catch(() => {});
 
-            // Wait for video to produce frames, then activate
+            // Wait for video to produce real-sized frames, then activate.
+            // onloadeddata may fire with a tiny placeholder (2x2) before
+            // actual frames; onresize fires when the resolution changes.
             video.onloadeddata = () => {
                 clearTimeout(webrtcTimeout);
+                console.log('WebRTC onloadeddata:', video.videoWidth, 'x', video.videoHeight);
                 activateWebRTCTexture();
+            };
+            video.onresize = () => {
+                console.log('WebRTC onresize:', video.videoWidth, 'x', video.videoHeight);
+                if (!webrtcActive) activateWebRTCTexture();
             };
         };
 
@@ -560,10 +580,12 @@
 
     function updateRobotUI() {
         calibrateBtn.disabled = robotState.calibrating;
-        calibrateBtn.textContent = robotState.calibrating ? 'Calibrating...'
-            : robotState.calibrated ? 'Recalibrate' : 'Calibrate';
+        calibrateBtn.textContent = robotState.calibrating ? 'Homing...'
+            : robotState.calibrated ? 'Re-Home' : 'Home';
         positionBtn.textContent = `Position: ${robotState.position_tracking ? 'ON' : 'OFF'}`;
         positionBtn.style.background = robotState.position_tracking ? '#1a73e8' : '#444';
+        pauseBtn.textContent = robotState.user_paused ? 'Resume' : 'Pause';
+        pauseBtn.style.background = robotState.user_paused ? '#e53935' : '#444';
         hudDirty = true;
     }
 
@@ -599,6 +621,7 @@
         } else if (data.type === 'robot_state') {
             robotState.calibrated = data.calibrated;
             robotState.position_tracking = data.position_tracking;
+            if (data.user_paused !== undefined) robotState.user_paused = data.user_paused;
             robotState.calibrating = false;
             updateRobotUI();
         } else if (data.type === 'ping') {
@@ -656,6 +679,7 @@
             if (data.robot) {
                 robotState.calibrated = data.robot.calibrated;
                 robotState.position_tracking = data.robot.position_tracking;
+                if (data.robot.user_paused !== undefined) robotState.user_paused = data.robot.user_paused;
                 if (!robotState.calibrating) updateRobotUI();
             }
             // Sync resolution from telemetry (late-join clients)
@@ -724,6 +748,10 @@
         sendCommand('pause');
     });
     renderer.xr.addEventListener('sessionstart', () => {
+        // Auto-start stream when entering VR if not already connected
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            startStream();
+        }
         sendCommand('resume');
         // Quest 3 proximity sensor: sessionend does NOT fire when headset is
         // removed from head. Instead the XR session's visibilityState changes
@@ -838,7 +866,7 @@
 
     // --- VR HUD (head-locked status bar, visible in VR only) ---
     const hudCanvas = document.createElement('canvas');
-    hudCanvas.width = 1024;
+    hudCanvas.width = 1280;
     hudCanvas.height = 192;
     const hudCtx = hudCanvas.getContext('2d');
 
@@ -886,18 +914,21 @@
         ctx.font = 'bold 28px monospace';
         let x = 24;
 
-        // Calibration
+        // Status (unified: homing > paused > not homed > running)
         if (robotState.calibrating) {
             ctx.fillStyle = '#ffa726';
-            ctx.fillText('CALIBRATING...', x, y1);
-        } else if (robotState.calibrated) {
-            ctx.fillStyle = '#4caf50';
-            ctx.fillText('CALIBRATED', x, y1);
-        } else {
+            ctx.fillText('HOMING...', x, y1);
+        } else if (robotState.user_paused) {
+            ctx.fillStyle = '#e53935';
+            ctx.fillText('PAUSED', x, y1);
+        } else if (!robotState.calibrated) {
             ctx.fillStyle = '#ff5722';
-            ctx.fillText('UNCALIBRATED', x, y1);
+            ctx.fillText('NOT HOMED', x, y1);
+        } else {
+            ctx.fillStyle = '#4caf50';
+            ctx.fillText('RUNNING', x, y1);
         }
-        x += 290;
+        x += 210;
 
         ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 26;
 
@@ -909,7 +940,7 @@
             ctx.fillStyle = '#888';
             ctx.fillText('POS:OFF', x, y1);
         }
-        x += 170;
+        x += 150;
 
         ctx.fillStyle = '#555'; ctx.fillText('|', x, y1); x += 26;
 
@@ -961,7 +992,7 @@
         // Line 3: Controller hints
         ctx.font = '22px monospace';
         ctx.fillStyle = '#777';
-        ctx.fillText('[A/X] Calibrate  [B/Y] Position  [R3] Res  [L3] Transport  [LSqueeze] HUD', 24, y3);
+        ctx.fillText('[A/X] Home  [B/Y] Pos  [RSqueeze] Pause  [R3] Res  [L3] Transport  [LSqueeze] HUD', 24, y3);
 
         hudTexture.needsUpdate = true;
     }
@@ -1028,6 +1059,16 @@
                     toggleHUD();
                 }
                 prevButtons[gk] = gripPressed;
+            }
+
+            // Right grip/squeeze (index 1) = Toggle Pause (lock robot)
+            if (hand === 'right' && btns.length > 1) {
+                const rpk = hand + '_1';
+                const rGripPressed = btns[1].pressed;
+                if (rGripPressed && !prevButtons[rpk]) {
+                    sendCommand('toggle_pause');
+                }
+                prevButtons[rpk] = rGripPressed;
             }
         }
     }
@@ -1126,7 +1167,7 @@
         // WebRTC: draw video frame to the same canvas used by JPEG
         if (webrtcActive && webrtcVideoEl && webrtcVideoEl.readyState >= webrtcVideoEl.HAVE_CURRENT_DATA) {
             const vw = webrtcVideoEl.videoWidth, vh = webrtcVideoEl.videoHeight;
-            if (vw > 0 && (drawCanvas.width !== vw || drawCanvas.height !== vh)) {
+            if (vw > 100 && vh > 100 && (drawCanvas.width !== vw || drawCanvas.height !== vh)) {
                 drawCanvas.width = vw;
                 drawCanvas.height = vh;
                 SBS_WIDTH = vw;
@@ -1266,6 +1307,7 @@
             stopBtn.disabled = false;
             calibrateBtn.disabled = false;
             positionBtn.disabled = false;
+            pauseBtn.disabled = false;
             debugEl.textContent = 'ws open';
         };
 
@@ -1345,6 +1387,7 @@
         stopBtn.disabled = true;
         calibrateBtn.disabled = true;
         positionBtn.disabled = true;
+        pauseBtn.disabled = true;
     }
 
     calibrateBtn.addEventListener('click', () => {
@@ -1355,6 +1398,9 @@
     });
     positionBtn.addEventListener('click', () => {
         sendCommand('toggle_position');
+    });
+    pauseBtn.addEventListener('click', () => {
+        sendCommand('toggle_pause');
     });
 
     startBtn.addEventListener('click', () => startStream());
