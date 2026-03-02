@@ -719,15 +719,25 @@
         console.warn('VR button unavailable:', e.message);
     }
 
-    // Headset-off detection: pause robot when XR session ends or page hidden
+    // Headset-off detection: pause robot when headset removed or XR session ends
     renderer.xr.addEventListener('sessionend', () => {
         sendCommand('pause');
     });
     renderer.xr.addEventListener('sessionstart', () => {
         sendCommand('resume');
-    });
-    document.addEventListener('visibilitychange', () => {
-        sendCommand(document.hidden ? 'pause' : 'resume');
+        // Quest 3 proximity sensor: sessionend does NOT fire when headset is
+        // removed from head. Instead the XR session's visibilityState changes
+        // to "hidden". Listen on the session object itself (not document).
+        const session = renderer.xr.getSession();
+        if (session) {
+            session.addEventListener('visibilitychange', () => {
+                if (session.visibilityState === 'hidden') {
+                    sendCommand('pause');
+                } else if (session.visibilityState === 'visible') {
+                    sendCommand('resume');
+                }
+            });
+        }
     });
 
     // --- Texture ---
@@ -976,7 +986,7 @@
                 robotState.calibrating = true;
                 hudDirty = true;
                 updateRobotUI();
-                sendCommand(robotState.calibrated ? 'recalibrate' : 'calibrate');
+                sendCommand('calibrate');
             }
             prevButtons[pk] = primaryPressed;
 
@@ -1341,7 +1351,7 @@
         if (robotState.calibrating) return;
         robotState.calibrating = true;
         updateRobotUI();
-        sendCommand(robotState.calibrated ? 'recalibrate' : 'calibrate');
+        sendCommand('calibrate');
     });
     positionBtn.addEventListener('click', () => {
         sendCommand('toggle_position');

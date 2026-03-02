@@ -281,20 +281,17 @@ class TeleHead:
         logger.info("Resume: waiting for VR pose data")
 
     def calibrate_soft(self) -> bool:
-        """Instant recalibration: current servo position becomes new home,
-        current VR pose becomes new neutral. No servo movement."""
-        if self.ik is None:
+        """Instant recalibration: current position becomes new home,
+        current VR pose becomes new neutral. No servo movement.
+
+        Uses _smoothed_q (not servo reads) to avoid serial bus conflicts
+        with the control loop thread.
+        """
+        if self.ik is None or self._smoothed_q is None:
             return False
         with self._lock:
             pose = self._latest_pose
         if pose is None:
-            return False
-
-        if self.servo and self.servo.is_connected:
-            current_q = self.servo.read_joint_angles()
-        elif self._smoothed_q is not None:
-            current_q = self._smoothed_q.copy()
-        else:
             return False
 
         q_vr = pose.get("q")
@@ -302,8 +299,9 @@ class TeleHead:
         if q_vr is None:
             return False
 
-        self._moving_to_position = True  # brief gate
+        self._moving_to_position = True  # gate control loop
         try:
+            current_q = self._smoothed_q.copy()
             self.ik.set_home(current_q)
             self._smoothed_q = current_q.copy()
             self.ik.calibrate_neutral_vr(q_vr, p_vr)
@@ -311,6 +309,31 @@ class TeleHead:
             self._moving_to_position = False
         logger.info("Soft recalibration complete (no movement)")
         return True
+
+    def toggle_position_tracking(self):
+        """Toggle position tracking with atomic soft recalibration.
+
+        Holds _moving_to_position gate across BOTH the recalibration and
+        the toggle so the control loop never sees a half-updated state.
+        """
+        self._moving_to_position = True
+        try:
+            # Soft recalibrate: current position → home, current VR → neutral
+            if self.ik is not None and self._smoothed_q is not None:
+                with self._lock:
+                    pose = self._latest_pose
+                if pose is not None:
+                    q_vr = pose.get("q")
+                    p_vr = pose.get("p", {"x": 0, "y": 0, "z": 0})
+                    if q_vr is not None:
+                        current_q = self._smoothed_q.copy()
+                        self.ik.set_home(current_q)
+                        self._smoothed_q = current_q.copy()
+                        self.ik.calibrate_neutral_vr(q_vr, p_vr)
+            self.position_tracking = not self.position_tracking
+        finally:
+            self._moving_to_position = False
+        logger.info(f"Position tracking: {'ON' if self.position_tracking else 'OFF'}")
 
     def on_head_pose(self, pose: dict):
         """Callback for new head pose data from the server."""
@@ -491,7 +514,10 @@ class TeleHead:
                         self.servo.write_joint_angles(new_q)
                     continue
                 elif self._watchdog_active:
-                    logger.info("Pose watchdog cleared — VR data resumed")
+                    # Headset back on: recalibrate so robot starts from
+                    # current (home) position with current VR pose as neutral.
+                    self.calibrate_soft()
+                    logger.info("Pose watchdog cleared — VR data resumed, recalibrated")
                     self._watchdog_active = False
 
             if pose is not None and self.ik is not None:
@@ -791,9 +817,7 @@ def main():
                         else:
                             print("  >>> No head pose data yet. Connect Quest first.")
                     elif line == "p":
-                        if telehead.position_tracking:
-                            telehead.calibrate_soft()
-                        telehead.position_tracking = not telehead.position_tracking
+                        telehead.toggle_position_tracking()
                         state = "ON" if telehead.position_tracking else "OFF"
                         print(f"  >>> Position tracking: {state}")
             except (EOFError, KeyboardInterrupt):

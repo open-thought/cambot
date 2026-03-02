@@ -404,9 +404,7 @@ async def websocket_stream(request):
                                     asyncio.ensure_future(
                                         _do_recalibrate(th, ws))
                                 elif action == "toggle_position":
-                                    if th.position_tracking:
-                                        th.calibrate_soft()
-                                    th.position_tracking = not th.position_tracking
+                                    th.toggle_position_tracking()
                                     try:
                                         await ws.send_str(json.dumps(
                                             _robot_state_msg(th)))
