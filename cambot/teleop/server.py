@@ -416,7 +416,8 @@ async def websocket_stream(request):
                                     asyncio.ensure_future(_do_calibrate(th, ws))
                                 elif action == "pause":
                                     th.pause()
-                                    state['video_paused'] = True
+                                    if not data.get('keep_video'):
+                                        state['video_paused'] = True
                                 elif action == "resume":
                                     th.resume()
                                     state['video_paused'] = False

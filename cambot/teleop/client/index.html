@@ -743,9 +743,10 @@
         console.warn('VR button unavailable:', e.message);
     }
 
-    // Headset-off detection: pause robot when headset removed or XR session ends
+    // When exiting VR: pause robot (watchdog return-to-home) but keep
+    // video streaming so the 2D web page shows live frames.
     renderer.xr.addEventListener('sessionend', () => {
-        sendCommand('pause');
+        sendCommand('pause', { keep_video: true });
     });
     renderer.xr.addEventListener('sessionstart', () => {
         // Auto-start stream when entering VR if not already connected
@@ -1205,17 +1206,6 @@
         }
 
         renderer.render(scene, camera);
-
-        // FPS counting for WebRTC (ws.onmessage binary path is skipped)
-        if (webrtcActive) {
-            frameCount++;
-            const now = performance.now();
-            if (now - lastFpsTime >= 1000) {
-                fpsEl.textContent = frameCount;
-                frameCount = 0;
-                lastFpsTime = now;
-            }
-        }
 
         renderCount++;
         if (renderCount % 300 === 0) {
