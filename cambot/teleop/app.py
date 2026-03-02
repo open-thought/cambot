@@ -883,7 +883,8 @@ def main():
     print("=" * 60 + "\n")
 
     try:
-        web.run_app(app, host="0.0.0.0", port=args.server_port, ssl_context=ssl_ctx)
+        web.run_app(app, host="0.0.0.0", port=args.server_port,
+                    ssl_context=ssl_ctx, shutdown_timeout=1.0)
     except KeyboardInterrupt:
         pass
     finally:
