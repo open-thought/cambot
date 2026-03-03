@@ -33,11 +33,9 @@ For sourcing servos, the bus controller, power supply, USB cables, and screwdriv
 
 ## Motor Configuration (Before Assembly)
 
-Configure each servo **one at a time** (connect only one motor to the bus):
-
 ### 1. Set Motor IDs
 
-Assign IDs 1-6, one motor at a time:
+Connect only **one motor at a time** to the bus and assign IDs 1-6:
 
 ```bash
 ./run_fix_servo_ids.sh --set-id 1   # base_yaw
@@ -81,7 +79,7 @@ These values were tuned for smooth VR teleop tracking. The C001 high-torque join
 1. Label each servo with its ID (1-6) before assembly — they are indistinguishable once mounted.
 2. Assemble from base to camera: Baseplate -> Link1 -> Link2 -> Link3 -> Link4 -> Link5 -> ZedMiniMount.
 3. Route servo cables through the links. Daisy-chain all servos on the same bus.
-4. Apply medium-strength threadlocker (e.g. Loctite 243) to the servo horn screws — vibrations will loosen them over time.
+4. Apply medium-strength threadlocker (e.g. Loctite 243) to the servo flange screws — vibrations will loosen them over time.
 5. Mount the ZED Mini camera on the top link using the printed mount.
 
 ## Calibration
@@ -90,7 +88,7 @@ After assembly, calibrate the two reference poses:
 
 ### 1. URDF Zero (Resting) Pose
 
-Position the arm in the resting pose shown in `3dprint/CamBot_v2.png` — all joints at approximately 2048 steps (mid-range). This defines the URDF zero reference for the IK solver.
+Position the arm in the resting pose shown in `3dprint/CamBot_v2.png`. This defines the URDF zero reference for the IK solver.
 
 ```bash
 ./run_teleop.sh --save-resting
@@ -115,11 +113,11 @@ Move the arm to the starting camera position for VR teleop (where the camera fac
 ./run_teleop.sh --no-zed           # use fallback USB camera
 ```
 
-Open the displayed HTTPS URL on a Meta Quest 3, enter VR, then press Enter in the terminal to calibrate the neutral head position.
+Open the displayed HTTPS URL in the headset browser, enter VR, then press Enter in the terminal to calibrate the neutral head position.
 
 ## PID Tuning (Optional, Advanced)
 
-The default PID values set by `run_set_pid.sh` work well for general use. If you want to tune for your specific build (different filament, print tolerances, or payload), there are two approaches:
+The default PID values set by `run_set_pid.sh` work well for general use. If you want to tune for your specific build (different filament or payload), there are two approaches:
 
 ### Interactive tuning with debug_control
 
@@ -142,4 +140,4 @@ Switch to PID mode (press `P` in the TUI) to adjust P, D, and I gains per joint 
 
 Runs automated step-response tests and searches for gains that minimize overshoot and settling time.
 
-If you find better PID values for your build, please share them by [opening a GitHub issue](https://github.com/koepf/cambot/issues).
+If you find better PID values for your build, please share them by [opening a GitHub issue](https://github.com/open-thought/cambot/issues).
