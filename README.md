@@ -52,10 +52,7 @@ uv pip install -e ".[viz]"       # + URDF visualization (viser)
 uv pip install -e ".[webrtc]"    # + WebRTC streaming (aiortc)
 ```
 
-For ZED Mini support, install pyzed from the ZED SDK (not PyPI):
-```bash
-/usr/local/zed/get_python_api.py
-```
+For ZED Mini support, install the [ZED SDK](https://www.stereolabs.com/en-de/developers/release) and the [ZED Python API](https://www.stereolabs.com/docs/development/python/install) (not available on PyPI).
 
 ## VR Teleop
 
@@ -68,7 +65,70 @@ Stream stereo video to a WebXR-compatible VR headset and control the robot arm w
 ./run_teleop.sh --no-zed                     # use fallback camera
 ```
 
-Open the displayed HTTPS URL in the headset browser, then enter VR.
+<details>
+<summary>All options</summary>
+
+```
+usage: cambot-teleop [-h] [--port PORT] [--no-robot] [--no-camera] [--no-zed]
+                     [--smoothing SMOOTHING] [--rate RATE]
+                     [--max-joint-vel MAX_JOINT_VEL]
+                     [--position-scale POSITION_SCALE]
+                     [--max-pos-delta MAX_POS_DELTA]
+                     [--workspace-bounds WORKSPACE_BOUNDS]
+                     [--watchdog-timeout WATCHDOG_TIMEOUT]
+                     [--resolution {vga,720p,1080p,2k}]
+                     [--camera-fps CAMERA_FPS] [--jpeg-quality JPEG_QUALITY]
+                     [--no-webrtc] [--server-port SERVER_PORT]
+                     [--save-home] [--save-resting]
+                     [--home HOME] [--resting RESTING]
+
+  --port PORT               Robot serial port (default: /dev/ttyACM0)
+  --no-robot                Run without robot
+  --no-camera               Run without camera
+  --no-zed                  Use fallback camera instead of ZED SDK
+  --smoothing SMOOTHING     EMA smoothing (0=none, 0.99=max)
+  --rate RATE               Control loop Hz
+  --max-joint-vel MAX_JOINT_VEL
+                            Max joint velocity rad/s (default: 20.0)
+  --position-scale POSITION_SCALE
+                            Scale factor for VR head translation (default: 1.0)
+  --max-pos-delta MAX_POS_DELTA
+                            Safety sphere radius in meters (default: 0.15, 0=disable)
+  --workspace-bounds WORKSPACE_BOUNDS
+                            Bounding box 'xmin,xmax,ymin,ymax,zmin,zmax' (meters)
+  --watchdog-timeout WATCHDOG_TIMEOUT
+                            Return to home after N seconds without VR pose (default: 3.0, 0=disable)
+  --resolution {vga,720p,1080p,2k}
+                            Camera resolution (default: 720p)
+  --camera-fps CAMERA_FPS   Camera FPS (default: auto based on resolution)
+  --jpeg-quality JPEG_QUALITY
+                            JPEG encoding quality 1-100 (default: 85)
+  --no-webrtc               Disable WebRTC, use WebSocket JPEG only
+  --server-port SERVER_PORT HTTPS server port (default: 8080)
+  --save-home               Save current position as home and exit
+  --save-resting            Save current position as resting and exit
+  --home HOME               Path to home_position.json
+  --resting RESTING         Path to resting_position.json
+```
+
+</details>
+
+The server prints an HTTPS URL in the terminal — open it in the headset browser, then enter VR.
+
+```
+============================================================
+  CamBot TeleHead: https://192.168.0.103:8080
+  Robot: connected on /dev/ttyACM0
+  Camera: ZED Mini 720p@60fps q85
+  WebRTC: enabled (H.264)
+  Safety: watchdog=3.0s
+
+  Press ENTER to home (capture neutral head position).
+  Press P+ENTER to toggle position tracking (default: OFF).
+  Press L+ENTER to lock/unlock robot (pause control).
+  Press Ctrl+C to quit.
+============================================================
+```
 
 ### Controls
 
