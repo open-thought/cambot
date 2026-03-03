@@ -11,6 +11,7 @@ dependencies = [
     "scipy>=1.14",
     "aiohttp>=3.10",
     "opencv-python>=4.10",
+    "aiortc>=1.9",
 ]
 
 [project.optional-dependencies]
@@ -21,9 +22,6 @@ zed = [
 ]
 viz = [
     "viser>=0.2",
-]
-webrtc = [
-    "aiortc>=1.9",
 ]
 
 [project.scripts]

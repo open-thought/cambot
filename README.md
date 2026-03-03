@@ -10,6 +10,7 @@
 
 ## Hardware
 
+- **Body:** 7x 3D printed parts (PLA)
 - **Servos:** 6x Feetech STS3215 (serial bus)
 - **Camera:** [StereoLabs ZED Mini](https://www.stereolabs.com/en-de/store/products/zed-mini) (63mm baseline stereo)
 - **Joints:** base_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_yaw, camera_roll
@@ -49,7 +50,6 @@ Tested on Linux (Ubuntu 24.04). Requires [uv](https://docs.astral.sh/uv/getting-
 ```bash
 uv pip install -e .              # install cambot package (editable)
 uv pip install -e ".[viz]"       # + URDF visualization (viser)
-uv pip install -e ".[webrtc]"    # + WebRTC streaming (aiortc)
 ```
 
 For ZED Mini support, install the [ZED SDK](https://www.stereolabs.com/en-de/developers/release) and the [ZED Python API](https://www.stereolabs.com/docs/development/python/install) (not available on PyPI).
@@ -184,8 +184,8 @@ Or run directly via entry points: `uv run cambot-debug-control`
 - Python 3.12+
 - `feetech-servo-sdk` (servo communication, imported as `scservo_sdk`)
 - `numpy`, `scipy`, `ikpy` (IK solver)
-- `aiohttp`, `opencv-python` (teleop server + video)
-- Optional: `pyzed` (ZED SDK), `viser` (URDF viz), `aiortc` (WebRTC)
+- `aiohttp`, `opencv-python`, `aiortc` (teleop server + video + WebRTC)
+- Optional: `pyzed` (ZED SDK), `viser` (URDF viz)
 
 ## Acknowledgements
 
