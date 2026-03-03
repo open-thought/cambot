@@ -4,14 +4,14 @@
   <img src="3dprint/CamBot_v2.png" alt="CamBot" width="600">
 </p>
 
-6-DOF camera arm for stereo vision, built with Feetech STS3215 servos and a ZED Mini stereo camera. Includes a VR teleop system for real-time head tracking from a Meta Quest 3.
+6-DOF camera arm for stereo vision, built with Feetech STS3215 servos and a ZED Mini stereo camera. Includes a VR teleop system using WebXR for real-time head tracking from any compatible VR headset (tested with Meta Quest 3).
 
 **[Build & Assembly Guide](docs/BUILD_GUIDE.md)**
 
 ## Hardware
 
-- **Servos:** 6x Feetech STS3215 (serial bus, 1 Mbaud, `/dev/ttyACM0`)
-- **Camera:** ZED Mini (63mm baseline stereo)
+- **Servos:** 6x Feetech STS3215 (serial bus)
+- **Camera:** [StereoLabs ZED Mini](https://www.stereolabs.com/en-de/store/products/zed-mini) (63mm baseline stereo)
 - **Joints:** base_yaw, shoulder_pitch, elbow_pitch, wrist_pitch, wrist_yaw, camera_roll
 
 ## Project Structure
@@ -28,7 +28,7 @@ cambot/
     ik_solver.py      IK solver (ikpy + URDF)
     capture.py        ZED Mini / fallback camera capture
     webrtc.py         WebRTC H.264 video track
-    client/           Quest 3 VR viewer (Three.js + WebXR)
+    client/           WebXR stereo viewer (Three.js)
   tools/              CLI diagnostic and setup tools
     fix_servo_ids.py  Scan and assign servo IDs
     read_params.py    Register dump / read / write
@@ -39,7 +39,7 @@ cambot/
 calibration/          Saved positions and calibration data
 urdf/                 URDF model and STL meshes
 3dprint/              STL files for 3D printing (mm scale)
-docs/                 Datasheets and manuals
+docs/                 Build guide, datasheets, and manuals
 ```
 
 ## Setup
@@ -59,7 +59,7 @@ For ZED Mini support, install pyzed from the ZED SDK (not PyPI):
 
 ## VR Teleop
 
-Stream stereo video to a Meta Quest 3 and control the robot arm with head tracking:
+Stream stereo video to a WebXR-compatible VR headset and control the robot arm with head tracking:
 
 ```bash
 ./run_teleop.sh                              # full mode
@@ -68,7 +68,7 @@ Stream stereo video to a Meta Quest 3 and control the robot arm with head tracki
 ./run_teleop.sh --no-zed                     # use fallback camera
 ```
 
-Open the displayed HTTPS URL on the Quest 3, then enter VR.
+Open the displayed HTTPS URL in the headset browser, then enter VR.
 
 ### Controls
 
@@ -81,7 +81,7 @@ Open the displayed HTTPS URL on the Quest 3, then enter VR.
 | L + Enter | Toggle pause (lock robot in place) |
 | Ctrl+C | Quit (returns robot to resting pose) |
 
-**Quest 3 controllers:**
+**VR controllers (WebXR gamepad):**
 
 | Button | Action |
 |--------|--------|
