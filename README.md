@@ -126,3 +126,13 @@ Or run directly via entry points: `uv run cambot-debug-control`
 - `numpy`, `scipy`, `ikpy` (IK solver)
 - `aiohttp`, `opencv-python` (teleop server + video)
 - Optional: `pyzed` (ZED SDK), `viser` (URDF viz), `aiortc` (WebRTC)
+
+## Acknowledgements
+
+- The [TRLC-DK1 Leader](https://github.com/robot-learning-co/trlc-dk1) arm design by Robot Learning Co. served as inspiration for CamBot.
+- Special thanks to [Autodesk](https://www.autodesk.com/) for providing Fusion for personal use.
+- Special thanks to [FeeTech](https://www.feetechrc.com/) for their great servo motors — I wish I already had these as a kid. ;-)
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE) for details.
