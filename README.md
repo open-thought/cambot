@@ -190,9 +190,12 @@ Or run directly via entry points: `uv run cambot-debug-control`
 ## Acknowledgements
 
 - The [TRLC-DK1 Leader](https://github.com/robot-learning-co/trlc-dk1) arm design by Robot Learning Co. served as inspiration for CamBot.
+- The [SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100) project by The Robot Studio — CamBot uses the same servo platform and controller board.
 - Special thanks to [Autodesk](https://www.autodesk.com/) for providing Fusion for personal use.
 - Special thanks to [FeeTech](https://www.feetechrc.com/) for their great servo motors — I wish I already had these as a kid. ;-)
 
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.
+
+If you build a CamBot or use this project in your work, I'd love to hear about it! A mention or link back is always appreciated. And if you get your CamBot running, please share a photo or video on [X/Twitter](https://x.com) — tag [@neurosp1ke](https://x.com/neurosp1ke) so I can see it!
