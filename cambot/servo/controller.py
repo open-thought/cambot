@@ -1,4 +1,4 @@
-"""StereoBot servo controller.
+"""CamBot servo controller.
 
 Provides a clean controller class wrapping scservo_sdk for the 6-DOF arm.
 
@@ -36,8 +36,8 @@ from cambot.servo.constants import (
 from cambot.servo.protocol import decode_sm, encode_sm
 
 
-class StereoBotServo:
-    """Controller for the 6-DOF StereoBot arm servos."""
+class CamBotServo:
+    """Controller for the 6-DOF CamBot arm servos."""
 
     JOINT_NAMES = JOINT_NAMES
     MOTOR_IDS = MOTOR_IDS
@@ -59,7 +59,7 @@ class StereoBotServo:
         port: str = "/dev/ttyACM0",
         baudrate: int = 1_000_000,
         urdf_zero: dict[str, int] | None = None,
-    ) -> "StereoBotServo":
+    ) -> "CamBotServo":
         """Connect to servos and initialize SRAM registers.
 
         Args:
@@ -376,7 +376,7 @@ class StereoBotServo:
             self.is_connected = False
 
 
-def save_home_position(servo: StereoBotServo, filepath: str) -> None:
+def save_home_position(servo: CamBotServo, filepath: str) -> None:
     """Save current raw encoder positions as home position."""
     raw = servo.read_raw_positions()
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -397,7 +397,7 @@ def load_home_position(filepath: str) -> dict[str, float] | None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="StereoBot servo interface test")
+    parser = argparse.ArgumentParser(description="CamBot servo interface test")
     parser.add_argument("--port", default="/dev/ttyACM0")
     parser.add_argument("--baudrate", type=int, default=1_000_000)
     parser.add_argument("--save-home", action="store_true",
@@ -409,7 +409,7 @@ if __name__ == "__main__":
     home_path = str(CALIBRATION_DIR / "home_position.json")
     resting_path = str(CALIBRATION_DIR / "resting_position.json")
 
-    servo = StereoBotServo.connect(args.port, args.baudrate)
+    servo = CamBotServo.connect(args.port, args.baudrate)
     print(f"Connected to {args.port}")
 
     try:
@@ -422,7 +422,7 @@ if __name__ == "__main__":
             print("\n--- Read current positions ---")
             angles = servo.read_joint_angles()
             raw = servo.read_raw_positions()
-            for name in StereoBotServo.JOINT_NAMES:
+            for name in CamBotServo.JOINT_NAMES:
                 r = angles.get(name, float("nan"))
                 s = raw.get(name, "?")
                 print(f"  {name:20s}: {math.degrees(r):+8.2f} deg  ({s} steps)")
@@ -434,7 +434,7 @@ if __name__ == "__main__":
 
             angles2 = servo.read_joint_angles()
             max_err = 0.0
-            for name in StereoBotServo.JOINT_NAMES:
+            for name in CamBotServo.JOINT_NAMES:
                 err = abs(angles.get(name, 0) - angles2.get(name, 0))
                 max_err = max(max_err, err)
                 print(f"  {name:20s}: {math.degrees(angles2.get(name, 0)):+8.2f} deg  (err={math.degrees(err):.2f} deg)")

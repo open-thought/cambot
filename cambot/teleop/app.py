@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-TeleHead: VR Head Tracking -> StereoBot IK Camera Control
+TeleHead: VR Head Tracking -> CamBot IK Camera Control
 
-Streams stereo video from ZED Mini on the StereoBot 6-DOF arm to Meta Quest 3
+Streams stereo video from ZED Mini on the CamBot 6-DOF arm to Meta Quest 3
 via WebSocket, receives head orientation + position back, and drives the robot
 via full inverse kinematics.
 
@@ -78,7 +78,7 @@ def quat_to_euler(q):
 
 
 class TeleHead:
-    """Connects VR head tracking to StereoBot IK camera control."""
+    """Connects VR head tracking to CamBot IK camera control."""
 
     def __init__(
         self,
@@ -149,7 +149,7 @@ class TeleHead:
     def connect(self):
         """Connect to the robot and set up IK."""
         if self.use_robot:
-            from cambot.servo.controller import StereoBotServo
+            from cambot.servo.controller import CamBotServo
 
             # Use resting position as URDF zero reference so that joint angles
             # match the URDF convention and ikpy joint limits are correct.
@@ -159,12 +159,12 @@ class TeleHead:
                 if urdf_zero:
                     logger.info(f"URDF zero from resting position: {self.resting_path}")
 
-            self.servo = StereoBotServo.connect(self.robot_port, urdf_zero=urdf_zero)
+            self.servo = CamBotServo.connect(self.robot_port, urdf_zero=urdf_zero)
             logger.info(f"Robot connected on {self.robot_port}")
 
         if self.use_ik:
-            from cambot.teleop.ik_solver import StereoBotIK, JOINT_NAMES
-            self.ik = StereoBotIK(
+            from cambot.teleop.ik_solver import CamBotIK, JOINT_NAMES
+            self.ik = CamBotIK(
                 position_scale=self.position_scale,
                 workspace_bounds=self.workspace_bounds,
                 max_position_delta=self.max_position_delta,
@@ -675,7 +675,7 @@ def main():
     )
 
     parser = argparse.ArgumentParser(
-        description="TeleHead: VR head tracking -> StereoBot IK camera control")
+        description="TeleHead: VR head tracking -> CamBot IK camera control")
     parser.add_argument("--port", default="/dev/ttyACM0", help="Robot serial port")
     parser.add_argument("--no-robot", action="store_true", help="Run without robot")
     parser.add_argument("--no-camera", action="store_true", help="Run without camera")
@@ -719,8 +719,8 @@ def main():
 
     # --- Save position modes ---
     if args.save_home or args.save_resting:
-        from cambot.servo.controller import StereoBotServo, save_home_position
-        servo = StereoBotServo.connect(args.port)
+        from cambot.servo.controller import CamBotServo, save_home_position
+        servo = CamBotServo.connect(args.port)
         try:
             if args.save_home:
                 save_home_position(servo, home_path)
@@ -902,7 +902,7 @@ def main():
     ssl_ctx.load_cert_chain(cert_file, key_file)
 
     print("\n" + "=" * 60)
-    print(f"  StereoBot TeleHead: https://{local_ip}:{args.server_port}")
+    print(f"  CamBot TeleHead: https://{local_ip}:{args.server_port}")
     print(f"  Robot: {'connected on ' + args.port if not args.no_robot else 'DISABLED'}")
     cam_info = 'DISABLED'
     if not args.no_camera and telehead._camera_config:

@@ -1,6 +1,12 @@
-# StereoBot
+# CamBot
+
+<p align="center">
+  <img src="3dprint/CamBot_v2.png" alt="CamBot" width="600">
+</p>
 
 6-DOF camera arm for stereo vision, built with Feetech STS3215 servos and a ZED Mini stereo camera. Includes a VR teleop system for real-time head tracking from a Meta Quest 3.
+
+**[Build & Assembly Guide](docs/BUILD_GUIDE.md)**
 
 ## Hardware
 
@@ -15,7 +21,7 @@ cambot/
   servo/              Shared servo communication layer
     constants.py      Register addresses, motor config, conversions
     protocol.py       Wire protocol (decode/encode, connect, EPROM helpers)
-    controller.py     StereoBotServo class, save/load calibration
+    controller.py     CamBotServo class, save/load calibration
   teleop/             VR teleop application
     app.py            Main entry point (TeleHead control loop)
     server.py         HTTPS + WebSocket server (aiohttp)
@@ -24,14 +30,11 @@ cambot/
     webrtc.py         WebRTC H.264 video track
     client/           Quest 3 VR viewer (Three.js + WebXR)
   tools/              CLI diagnostic and setup tools
-    servo_test.py     Interactive curses servo test
-    servo_offset.py   Homing offset / zero-point calibration
-    calibrate_limits.py  Passive joint limit calibration
     fix_servo_ids.py  Scan and assign servo IDs
     read_params.py    Register dump / read / write
+    set_pid.py        Write tested PID parameters to servos
     debug_control.py  Debug TUI with IK visualization
     pid_tuning.py     PID auto-tuner
-    waypoint_nav.py   Record-and-replay waypoint navigation
     visualize_urdf.py URDF visualization (viser)
 calibration/          Saved positions and calibration data
 urdf/                 URDF model and STL meshes
@@ -80,18 +83,15 @@ Additional safety: EMA smoothing, velocity clamping (20 rad/s), FK validation, t
 All tools have shell script wrappers in the project root:
 
 ```bash
-./run_servo_test.sh              # interactive servo test (curses TUI)
-./run_servo_offset.sh            # homing offset calibration
-./run_calibrate_limits.sh        # passive joint limit calibration
 ./run_fix_servo_ids.sh           # scan/set servo IDs
 ./run_read_params.sh             # register dump
+./run_set_pid.sh                 # write tested PID values to servos
 ./run_debug_control.sh           # debug TUI with IK
 ./run_pid_tuning.sh              # PID auto-tuner
-./run_waypoint_nav.sh            # record/replay waypoints
 ./run_visualize_urdf.sh          # URDF 3D viewer (browser)
 ```
 
-Or run directly as Python modules: `uv run python -m cambot.tools.servo_test`
+Or run directly as Python modules: `uv run python -m cambot.tools.debug_control`
 
 ## Dependencies
 

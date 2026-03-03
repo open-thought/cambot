@@ -1,7 +1,7 @@
 [project]
 name = "cambot"
 version = "0.1.0"
-description = "StereoBot teleop system — VR head tracking, stereo camera streaming, and servo control"
+description = "CamBot teleop system — VR head tracking, stereo camera streaming, and servo control"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
@@ -27,12 +27,9 @@ webrtc = [
 
 [project.scripts]
 cambot-teleop = "cambot.teleop.app:main"
-cambot-servo-test = "cambot.tools.servo_test:main"
-cambot-servo-offset = "cambot.tools.servo_offset:main"
-cambot-calibrate-limits = "cambot.tools.calibrate_limits:main"
 cambot-fix-servo-ids = "cambot.tools.fix_servo_ids:main"
 cambot-read-params = "cambot.tools.read_params:main"
-cambot-waypoint-nav = "cambot.tools.waypoint_nav:main"
+cambot-set-pid = "cambot.tools.set_pid:main"
 cambot-debug-control = "cambot.tools.debug_control:main"
 cambot-pid-tuning = "cambot.tools.pid_tuning:main"
 

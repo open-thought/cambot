@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StereoBot URDF visualization with viser.
+"""CamBot URDF visualization with viser.
 
 Modes:
   Default:  Interactive sliders to move each joint manually.
@@ -47,7 +47,7 @@ def read_servo_positions_raw(ph, pkt):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="StereoBot URDF visualizer")
+    parser = argparse.ArgumentParser(description="CamBot URDF visualizer")
     parser.add_argument("--live", action="store_true",
                         help="Read joint angles from Feetech servos")
     parser.add_argument("--port", default=DEFAULT_PORT)

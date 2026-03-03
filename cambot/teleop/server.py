@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WebSocket server for StereoBot VR telepresence.
+"""WebSocket server for CamBot VR telepresence.
 
 Streams stereo video (ZED Mini or fallback) to Quest 3 via WebSocket,
 receives head pose data for IK-based robot control.

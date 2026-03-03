@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PID Auto-Tuner for StereoBot Servos.
+"""PID Auto-Tuner for CamBot Servos.
 
 Automatically finds optimal PID values for each joint by running step response
 tests and optimizing a cost function that rewards fast, smooth, accurate settling.
@@ -39,7 +39,7 @@ from cambot.servo import (
     PID_FACTORY_DEFAULTS,
     decode_sm,
 )
-from cambot.servo.controller import StereoBotServo
+from cambot.servo.controller import CamBotServo
 
 # Calibration paths
 POSES_PATH = str(CALIBRATION_DIR / "pid_tuning_poses.json")
@@ -56,7 +56,7 @@ def load_tuning_poses(path: str) -> dict[str, list[dict[str, int]]]:
         return json.load(f)
 
 
-def capture_poses(servo: StereoBotServo, joints: list[str], path: str) -> None:
+def capture_poses(servo: CamBotServo, joints: list[str], path: str) -> None:
     """Interactive pose capture: disable torque, let user position robot, record."""
     print("=== Pose Capture Mode ===")
     print("Torque disabled. Manually position the robot for each pose.\n")
@@ -223,7 +223,7 @@ def compute_cost(m: ResponseMetrics) -> float:
 
 
 class PIDTuner:
-    """Automated PID tuner for StereoBot servos."""
+    """Automated PID tuner for CamBot servos."""
 
     def __init__(self, port: str = "/dev/ttyACM0", baudrate: int = 1_000_000,
                  dry_run: bool = False, verbose: bool = False,
@@ -234,20 +234,20 @@ class PIDTuner:
         self.verbose = verbose
         self.poses_path = poses_path
         self.poses: dict[str, list[dict[str, int]]] = load_tuning_poses(poses_path)
-        self.servo: StereoBotServo | None = None
+        self.servo: CamBotServo | None = None
         self._ext_sync_read: scs.GroupSyncRead | None = None
         # Results accumulator
         self.results: dict = {}
 
     def connect(self):
         """Connect to servos and set up sync read."""
-        self.servo = StereoBotServo.connect(self.port, self.baudrate)
+        self.servo = CamBotServo.connect(self.port, self.baudrate)
         # Extended GroupSyncRead for position (addr 56, 2 bytes)
         self._ext_sync_read = scs.GroupSyncRead(
             self.servo.ph, self.servo.pkt, ADDR_PRESENT_POSITION, 2
         )
         for name in JOINT_NAMES:
-            mid = StereoBotServo.MOTOR_IDS[name]
+            mid = CamBotServo.MOTOR_IDS[name]
             self._ext_sync_read.addParam(mid)
         print(f"Connected to {self.port}")
 
@@ -259,7 +259,7 @@ class PIDTuner:
 
     def read_pid(self, joint: str) -> tuple[int, int, int]:
         """Read current PID coefficients from a joint."""
-        mid = StereoBotServo.MOTOR_IDS[joint]
+        mid = CamBotServo.MOTOR_IDS[joint]
         ph, pkt = self.servo.ph, self.servo.pkt
         old_wt = ph.ser.write_timeout
         ph.ser.write_timeout = None
@@ -281,7 +281,7 @@ class PIDTuner:
         p = max(0, min(255, p))
         d = max(0, min(255, d))
         i = max(0, min(255, i))
-        mid = StereoBotServo.MOTOR_IDS[joint]
+        mid = CamBotServo.MOTOR_IDS[joint]
         ph, pkt = self.servo.ph, self.servo.pkt
 
         old_wt = ph.ser.write_timeout
@@ -314,7 +314,7 @@ class PIDTuner:
             comm = self._ext_sync_read.txRxPacket()
             if comm != scs.COMM_SUCCESS:
                 return 0
-            mid = StereoBotServo.MOTOR_IDS[joint]
+            mid = CamBotServo.MOTOR_IDS[joint]
             if not self._ext_sync_read.isAvailable(mid, ADDR_PRESENT_POSITION, 2):
                 return 0
             raw = self._ext_sync_read.getData(mid, ADDR_PRESENT_POSITION, 2)
@@ -337,7 +337,7 @@ class PIDTuner:
         self.servo.write_raw_positions({joint: target})
 
         t_end = time.monotonic() + duration
-        mid = StereoBotServo.MOTOR_IDS[joint]
+        mid = CamBotServo.MOTOR_IDS[joint]
         initial_distance = abs(start - target)
         safety_limit = initial_distance + SAFETY_POSITION_ERROR
 
@@ -587,7 +587,7 @@ class PIDTuner:
             old_wt = self.servo.ph.ser.write_timeout
             self.servo.ph.ser.write_timeout = None
             v_raw, _, _ = self.servo.pkt.read1ByteTxRx(
-                self.servo.ph, StereoBotServo.MOTOR_IDS["base_yaw"], 62
+                self.servo.ph, CamBotServo.MOTOR_IDS["base_yaw"], 62
             )
             voltage = round(v_raw * 0.1, 1)
             self.servo.ph.ser.write_timeout = old_wt
@@ -654,7 +654,7 @@ class PIDTuner:
 def main():
     cal_dir = str(CALIBRATION_DIR)
     parser = argparse.ArgumentParser(
-        description="PID Auto-Tuner for StereoBot servos",
+        description="PID Auto-Tuner for CamBot servos",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:

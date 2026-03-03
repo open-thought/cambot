@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<robot name="StereoBot">
+<robot name="CamBot">
 
   <!-- ==================== Materials ==================== -->
   <material name="dark_grey">

@@ -1,1 +1,1 @@
-"""VR teleop application for StereoBot."""
+"""VR teleop application for CamBot."""

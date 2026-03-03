@@ -1,4 +1,4 @@
-"""IK solver for StereoBot using ikpy + URDF.
+"""IK solver for CamBot using ikpy + URDF.
 
 Computes inverse kinematics for the 6-DOF arm to position/orient the
 ZED Mini camera mount based on VR head tracking input.
@@ -70,8 +70,8 @@ def vr_eye_to_neck(R_eye: np.ndarray, p_eye: np.ndarray) -> tuple[np.ndarray, np
     return R_eye, p_neck  # orientation is the same (rigid head)
 
 
-class StereoBotIK:
-    """IK solver for the StereoBot arm."""
+class CamBotIK:
+    """IK solver for the CamBot arm."""
 
     def __init__(self, urdf_path: str | Path | None = None, position_scale: float = 1.0,
                  validate_interval: int = 5,
@@ -119,7 +119,7 @@ class StereoBotIK:
             full_chain = ikpy.chain.Chain.from_urdf_file(
                 str(urdf_path),
                 base_elements=["base_link"],
-                name="stereobot",
+                name="cambot",
             )
 
         # Truncate: keep links up to and including camera_roll
@@ -142,7 +142,7 @@ class StereoBotIK:
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.chain = ikpy.chain.Chain(truncated_links, name="stereobot")
+            self.chain = ikpy.chain.Chain(truncated_links, name="cambot")
 
         # Build active_links_mask: only our 6 revolute joints are active.
         # ikpy index 0 = virtual base (fixed), 1-6 = revolute, 7 = fixed tip.
@@ -424,11 +424,11 @@ class StereoBotIK:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="StereoBot IK solver test")
+    parser = argparse.ArgumentParser(description="CamBot IK solver test")
     parser.add_argument("--home", default=None, help="Path to home_position.json")
     args = parser.parse_args()
 
-    ik = StereoBotIK()
+    ik = CamBotIK()
     print(f"Loaded URDF chain with {ik.n_links} links, {ik.n_active} active")
     print(f"Joint indices: {ik._joint_indices}")
 

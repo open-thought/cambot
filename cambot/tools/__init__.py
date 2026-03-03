@@ -1,1 +1,1 @@
-"""CLI diagnostic and setup tools for StereoBot servos."""
+"""CLI diagnostic and setup tools for CamBot servos."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Debug Control TUI for StereoBot.
+"""Debug Control TUI for CamBot.
 
 Two modes (Tab to switch):
   Joint Mode:    Select joint (1-6/Up/Down), move with Left/Right, +/- step size
@@ -52,8 +52,8 @@ from cambot.servo import (
     decode_sm,
     encode_sm,
 )
-from cambot.servo.controller import StereoBotServo
-from cambot.teleop.ik_solver import StereoBotIK
+from cambot.servo.controller import CamBotServo
+from cambot.teleop.ik_solver import CamBotIK
 
 # Extended sync read: addr 56, 15 bytes covers position(2) + speed(2) + load(2) + voltage(1) + temp(1) + pad(5) + current(2)
 # Current is at addr 69 which is 56+13, so we need 15 bytes: 69-56+2 = 15
@@ -111,8 +111,8 @@ class DebugControlTUI:
         self.port = port
         self.baudrate = baudrate
         self.servo_time_profile = servo_time_profile
-        self.servo: StereoBotServo | None = None
-        self.ik: StereoBotIK | None = None
+        self.servo: CamBotServo | None = None
+        self.ik: CamBotIK | None = None
 
         # Mode
         self.mode = MODE_JOINT
@@ -161,14 +161,14 @@ class DebugControlTUI:
     def connect(self):
         """Connect to servos and IK solver."""
         urdf_zero = self.resting_raw
-        self.servo = StereoBotServo.connect(self.port, self.baudrate, urdf_zero=urdf_zero)
+        self.servo = CamBotServo.connect(self.port, self.baudrate, urdf_zero=urdf_zero)
 
         # Set up extended GroupSyncRead (addr 56, 15 bytes)
         self._ext_sync_read = scs.GroupSyncRead(
             self.servo.ph, self.servo.pkt, SYNC_READ_START, SYNC_READ_LEN
         )
         for name in JOINT_NAMES:
-            mid = StereoBotServo.MOTOR_IDS[name]
+            mid = CamBotServo.MOTOR_IDS[name]
             self._ext_sync_read.addParam(mid)
 
         # Read PID coefficients (once)
@@ -180,7 +180,7 @@ class DebugControlTUI:
         self.actual_positions = dict(raw)
 
         # Init IK solver
-        self.ik = StereoBotIK()
+        self.ik = CamBotIK()
 
         # Init Cartesian target from current FK
         if self.resting_raw:
@@ -190,7 +190,7 @@ class DebugControlTUI:
     def _read_pid_coefficients(self):
         """Read P, D, I coefficients from EPROM for all motors."""
         for name in JOINT_NAMES:
-            mid = StereoBotServo.MOTOR_IDS[name]
+            mid = CamBotServo.MOTOR_IDS[name]
             p_val, _, _ = self.servo.pkt.read1ByteTxRx(self.servo.ph, mid, ADDR_P_COEFFICIENT)
             d_val, _, _ = self.servo.pkt.read1ByteTxRx(self.servo.ph, mid, ADDR_D_COEFFICIENT)
             i_val, _, _ = self.servo.pkt.read1ByteTxRx(self.servo.ph, mid, ADDR_I_COEFFICIENT)
@@ -203,7 +203,7 @@ class DebugControlTUI:
         Torque is re-enabled afterward if self.torque_on is True.
         """
         value = max(0, min(255, value))
-        mid = StereoBotServo.MOTOR_IDS[name]
+        mid = CamBotServo.MOTOR_IDS[name]
         ph, pkt = self.servo.ph, self.servo.pkt
         addr = PID_COEFF_ADDRS[coeff_idx]
 
@@ -263,7 +263,7 @@ class DebugControlTUI:
                 return
 
             for name in JOINT_NAMES:
-                mid = StereoBotServo.MOTOR_IDS[name]
+                mid = CamBotServo.MOTOR_IDS[name]
                 if not self._ext_sync_read.isAvailable(mid, ADDR_PRESENT_POSITION, 2):
                     continue
 
@@ -394,7 +394,7 @@ class DebugControlTUI:
         # --- Torque ---
         if key == ord('t'):
             name = JOINT_NAMES[self.selected_joint]
-            mid = StereoBotServo.MOTOR_IDS[name]
+            mid = CamBotServo.MOTOR_IDS[name]
             self.torque_on = not self.torque_on
             self.servo.pkt.write1ByteTxRx(
                 self.servo.ph, mid, ADDR_TORQUE_ENABLE, 1 if self.torque_on else 0
@@ -631,7 +631,7 @@ class DebugControlTUI:
 
         # Title bar
         mode_str = MODE_NAMES[self.mode]
-        title = f" StereoBot Debug Control [{mode_str}] "
+        title = f" CamBot Debug Control [{mode_str}] "
         torq_str = "TORQUE ON" if self.torque_on else "TORQUE OFF"
         header = f"{title}  |  {torq_str}  |  Tab=switch  q=quit"
         stdscr.addnstr(y, 0, header, w - 1, curses.A_BOLD | curses.color_pair(3))
@@ -727,7 +727,7 @@ class DebugControlTUI:
             if y >= h - 1:
                 break
 
-            mid = StereoBotServo.MOTOR_IDS[name]
+            mid = CamBotServo.MOTOR_IDS[name]
             goal = self.goal_positions.get(name, 0)
             actual = self.actual_positions.get(name, 0)
             err_steps = goal - actual
@@ -888,7 +888,7 @@ class DebugControlTUI:
             if y >= h - 1:
                 break
 
-            mid = StereoBotServo.MOTOR_IDS[name]
+            mid = CamBotServo.MOTOR_IDS[name]
             p, d, i = self.pid.get(name, PID_FACTORY_DEFAULTS)
             vals = [p, d, i]
 
@@ -986,7 +986,7 @@ def _curses_main(stdscr):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="StereoBot Debug Control TUI")
+    parser = argparse.ArgumentParser(description="CamBot Debug Control TUI")
     parser.add_argument("--port", default="/dev/ttyACM0", help="Serial port")
     parser.add_argument("--baudrate", type=int, default=1_000_000, help="Baud rate")
     parser.add_argument("--servo-profile", action="store_true",
