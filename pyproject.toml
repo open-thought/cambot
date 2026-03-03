@@ -32,6 +32,7 @@ cambot-read-params = "cambot.tools.read_params:main"
 cambot-set-pid = "cambot.tools.set_pid:main"
 cambot-debug-control = "cambot.tools.debug_control:main"
 cambot-pid-tuning = "cambot.tools.pid_tuning:main"
+cambot-visualize-urdf = "cambot.tools.visualize_urdf:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cambot"]

@@ -44,6 +44,8 @@ docs/                 Datasheets and manuals
 
 ## Setup
 
+Tested on Linux (Ubuntu 24.04). Requires [uv](https://docs.astral.sh/uv/getting-started/installation/) for Python environment and dependency management.
+
 ```bash
 uv pip install -e .              # install cambot package (editable)
 uv pip install -e ".[viz]"       # + URDF visualization (viser)
@@ -66,7 +68,31 @@ Stream stereo video to a Meta Quest 3 and control the robot arm with head tracki
 ./run_teleop.sh --no-zed                     # use fallback camera
 ```
 
-Open the displayed HTTPS URL on the Quest 3, enter VR, then press Enter in the terminal to calibrate the neutral head position. Press P to toggle position tracking.
+Open the displayed HTTPS URL on the Quest 3, then enter VR.
+
+### Controls
+
+**Terminal (host PC):**
+
+| Key | Action |
+|-----|--------|
+| Enter | Home robot and calibrate neutral head pose |
+| P + Enter | Toggle position tracking (orientation-only ↔ full 6-DOF) |
+| L + Enter | Toggle pause (lock robot in place) |
+| Ctrl+C | Quit (returns robot to resting pose) |
+
+**Quest 3 controllers:**
+
+| Button | Action |
+|--------|--------|
+| A / X | Home and calibrate (soft recalibrate if already homed) |
+| B / Y | Toggle position tracking |
+| Right squeeze | Toggle pause |
+| Left squeeze | Toggle HUD overlay |
+| Right thumbstick click | Cycle resolution (VGA → 720p → 1080p → 2K) |
+| Left thumbstick click | Toggle transport (WebRTC H.264 ↔ WebSocket JPEG) |
+
+The robot automatically pauses and returns to home when the headset is removed, and resumes when put back on.
 
 ### Safety features
 
@@ -91,7 +117,7 @@ All tools have shell script wrappers in the project root:
 ./run_visualize_urdf.sh          # URDF 3D viewer (browser)
 ```
 
-Or run directly as Python modules: `uv run python -m cambot.tools.debug_control`
+Or run directly via entry points: `uv run cambot-debug-control`
 
 ## Dependencies
 
