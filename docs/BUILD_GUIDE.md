@@ -46,16 +46,16 @@ Connect only **one motor at a time** to the bus and assign IDs 1-6:
 ./run_fix_servo_ids.sh --set-id 6   # camera_roll
 ```
 
-### 2. Set PID Parameters
+### 2. Set PID & Torque Parameters
 
-Connect all motors to the bus, then write the tested PID values:
+Connect all motors to the bus, then write the tested PID and torque values:
 
 ```bash
-./run_set_pid.sh            # write recommended P/D/I to all motors
+./run_set_pid.sh            # write recommended PID + torque settings
 ./run_set_pid.sh --dry-run  # preview values without writing
 ```
 
-The recommended values (factory defaults are P=16, D=32, I=0):
+The recommended PID values (factory defaults are P=16, D=32, I=0):
 
 | Joint | ID | Servo | P | D | I |
 |-------|---:|-------|--:|--:|--:|
@@ -67,6 +67,12 @@ The recommended values (factory defaults are P=16, D=32, I=0):
 | camera_roll | 6 | C046 (1:147) | 25 | 32 | 0 |
 
 These values were tuned for smooth VR teleop tracking. The C001 high-torque joints (base, shoulder, elbow) need different gains than the C046 fast joints (wrist, camera) due to their different gear ratios.
+
+The script also writes torque protection settings:
+- **Overload_Torque = 95** for motors 1-5 (factory default is 25). The factory value is too low — load-bearing joints (especially shoulder_pitch) constantly fight gravity, causing the servo to trip overload protection during normal operation. Setting it to 95 allows up to 95% of maximum torque before protection activates.
+- **Max_Torque_Limit = 500** (50%) for camera_roll — no need for full torque on camera rotation.
+
+A full reference dump of all register values is available in [`docs/reference_params.txt`](reference_params.txt).
 
 ### 3. Verify
 
@@ -88,7 +94,9 @@ After assembly, calibrate the two reference poses:
 
 ### 1. URDF Zero (Resting) Pose
 
-Position the arm in the resting pose shown in `3dprint/CamBot_v2.png`. This defines the URDF zero reference for the IK solver.
+Position the arm in the resting pose shown below. This defines the URDF zero reference for the IK solver.
+
+![CamBot URDF zero pose](../3dprint/CamBot_v2.png)
 
 ```bash
 ./run_teleop.sh --save-resting
@@ -97,7 +105,9 @@ Position the arm in the resting pose shown in `3dprint/CamBot_v2.png`. This defi
 
 ### 2. Home Pose
 
-Move the arm to the starting camera position for VR teleop (where the camera faces forward at a comfortable viewing angle):
+Move the arm to the starting camera position for VR teleop (where the camera faces forward at a comfortable viewing angle). The photo below shows an example home pose used during testing:
+
+![CamBot home pose example](../3dprint/CamBot_HomePose.jpg)
 
 ```bash
 ./run_teleop.sh --save-home
@@ -132,10 +142,10 @@ Switch to PID mode (press `P` in the TUI) to adjust P, D, and I gains per joint 
 > **Warning:** Automated tuning is experimental and puts the hardware under stress. It commands rapid step moves at various gain levels, which can cause jerky motion and high transient loads on the servos and 3D printed parts. Supervise the robot during tuning and be ready to kill the script if anything sounds or looks wrong.
 
 ```bash
-./run_pid_tuning.sh --capture-poses           # capture test poses first
-./run_pid_tuning.sh --joints shoulder_pitch    # tune a specific joint
-./run_pid_tuning.sh --verbose                  # tune all joints with detailed output
-./run_pid_tuning.sh --restore-factory          # reset to factory PID defaults
+uv run cambot-pid-tuning --capture-poses           # capture test poses first
+uv run cambot-pid-tuning --joints shoulder_pitch    # tune a specific joint
+uv run cambot-pid-tuning --verbose                  # tune all joints with detailed output
+uv run cambot-pid-tuning --restore-factory          # reset to factory PID defaults
 ```
 
 Runs automated step-response tests and searches for gains that minimize overshoot and settling time.

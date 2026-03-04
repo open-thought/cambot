@@ -24,6 +24,8 @@ from cambot.servo import (
     ADDR_P_COEFFICIENT,
     ADDR_D_COEFFICIENT,
     ADDR_I_COEFFICIENT,
+    ADDR_MAX_TORQUE_LIMIT,
+    ADDR_OVERLOAD_TORQUE,
     connect,
     flush_serial,
     unlock_eprom,
@@ -47,6 +49,25 @@ PID_ADDRS = [
     ("I", ADDR_I_COEFFICIENT),
 ]
 
+# Overload_Torque (EPROM addr 36) overrides per joint.
+# Factory default is 25%, which is too low for load-bearing joints — the servo
+# trips overload protection during normal operation under gravity.
+# Value 95 = allow up to 95% of max torque before triggering protection.
+RECOMMENDED_OVERLOAD_TORQUE = {
+    "base_yaw": 95,
+    "shoulder_pitch": 95,
+    "elbow_pitch": 95,
+    "wrist_pitch": 95,
+    "wrist_yaw": 95,
+    # camera_roll: left at factory default (25) — low torque joint
+}
+
+# Max_Torque_Limit (EPROM addr 16) overrides per joint.
+# Factory default is 1000 (100%). Camera roll is capped for safety.
+RECOMMENDED_MAX_TORQUE = {
+    "camera_roll": 500,  # 50% — no need for full torque on camera rotation
+}
+
 
 def read_pid(pkt, ph, mid):
     """Read current P, D, I values from a motor. Returns (P, D, I) or None."""
@@ -60,13 +81,32 @@ def read_pid(pkt, ph, mid):
     return tuple(values)
 
 
-def write_pid(pkt, ph, mid, p, d, i):
-    """Write P, D, I values to a motor (EPROM). Returns True on success."""
+def write_pid(pkt, ph, mid, p, d, i, overload_torque=None, max_torque=None):
+    """Write PID and torque parameters to a motor (EPROM).
+
+    Returns True on success.
+    """
     unlock_eprom(ph, pkt, mid)
 
     for val, (_, addr) in zip((p, d, i), PID_ADDRS):
         flush_serial(ph)
         result, _ = pkt.write1ByteTxRx(ph, mid, addr, val)
+        if result != scs.COMM_SUCCESS:
+            lock_eprom(ph, pkt, mid)
+            return False
+        time.sleep(0.01)
+
+    if overload_torque is not None:
+        flush_serial(ph)
+        result, _ = pkt.write1ByteTxRx(ph, mid, ADDR_OVERLOAD_TORQUE, overload_torque)
+        if result != scs.COMM_SUCCESS:
+            lock_eprom(ph, pkt, mid)
+            return False
+        time.sleep(0.01)
+
+    if max_torque is not None:
+        flush_serial(ph)
+        result, _ = pkt.write2ByteTxRx(ph, mid, ADDR_MAX_TORQUE_LIMIT, max_torque)
         if result != scs.COMM_SUCCESS:
             lock_eprom(ph, pkt, mid)
             return False
@@ -105,6 +145,8 @@ def main():
     for name in JOINT_NAMES:
         mid = MOTOR_IDS[name]
         new_p, new_d, new_i = RECOMMENDED_PID[name]
+        new_overload = RECOMMENDED_OVERLOAD_TORQUE.get(name)
+        new_max_torque = RECOMMENDED_MAX_TORQUE.get(name)
 
         # Ping
         flush_serial(ph)
@@ -123,23 +165,48 @@ def main():
             old_str = f"{old[0]:>5} {old[1]:>5} {old[2]:>5}"
 
         if args.dry_run:
-            print(f"  {name:<20} {old_str}  {new_p:>5} {new_d:>5} {new_i:>5}  --")
+            extras = []
+            if new_overload is not None:
+                extras.append(f"Overload_Torque->{new_overload}")
+            if new_max_torque is not None:
+                extras.append(f"Max_Torque->{new_max_torque}")
+            extra = f"  ({', '.join(extras)})" if extras else ""
+            print(f"  {name:<20} {old_str}  {new_p:>5} {new_d:>5} {new_i:>5}  --{extra}")
             continue
 
         # Write new values
-        ok = write_pid(pkt, ph, mid, new_p, new_d, new_i)
+        ok = write_pid(pkt, ph, mid, new_p, new_d, new_i, new_overload,
+                       new_max_torque)
         if not ok:
             print(f"  {name:<20} {old_str}  {new_p:>5} {new_d:>5} {new_i:>5}  WRITE FAIL")
             errors += 1
             continue
 
-        # Read back to verify
+        # Read back to verify PID
         verify = read_pid(pkt, ph, mid)
         if verify == (new_p, new_d, new_i):
             status = "OK"
         else:
             status = f"MISMATCH {verify}"
             errors += 1
+
+        if new_overload is not None:
+            flush_serial(ph)
+            val, result, _ = pkt.read1ByteTxRx(ph, mid, ADDR_OVERLOAD_TORQUE)
+            if result == scs.COMM_SUCCESS and val == new_overload:
+                status += f" +OvlTq={new_overload}"
+            else:
+                status += f" +OvlTq MISMATCH({val})"
+                errors += 1
+
+        if new_max_torque is not None:
+            flush_serial(ph)
+            val, result, _ = pkt.read2ByteTxRx(ph, mid, ADDR_MAX_TORQUE_LIMIT)
+            if result == scs.COMM_SUCCESS and val == new_max_torque:
+                status += f" +MaxTq={new_max_torque}"
+            else:
+                status += f" +MaxTq MISMATCH({val})"
+                errors += 1
 
         print(f"  {name:<20} {old_str}  {new_p:>5} {new_d:>5} {new_i:>5}  {status}")
 

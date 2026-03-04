@@ -211,6 +211,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "aiortc" },
     { name = "feetech-servo-sdk" },
     { name = "ikpy" },
     { name = "numpy" },
@@ -222,14 +223,11 @@ dependencies = [
 viz = [
     { name = "viser" },
 ]
-webrtc = [
-    { name = "aiortc" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10" },
-    { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.9" },
+    { name = "aiortc", specifier = ">=1.9" },
     { name = "feetech-servo-sdk", specifier = ">=1.0" },
     { name = "ikpy", specifier = ">=3.4" },
     { name = "numpy", specifier = ">=2.0" },
@@ -237,7 +235,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.14" },
     { name = "viser", marker = "extra == 'viz'", specifier = ">=0.2" },
 ]
-provides-extras = ["zed", "viz", "webrtc"]
+provides-extras = ["zed", "viz"]
 
 [[package]]
 name = "certifi"

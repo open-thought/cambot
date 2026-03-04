@@ -1,0 +1,408 @@
+
+======================================================================
+  Motor 1: base_yaw
+======================================================================
+
+  --- EPROM ---
+  Firmware_Major                 addr=0   =     3  (0x0003)  Firmware major version
+  Firmware_Minor                 addr=1   =    10  (0x000a)  Firmware minor version
+  Model_Number                   addr=3   =   777  (0x0309)  Model number (777=STS3215)
+  ID                             addr=5   =     1  (0x0001)  Motor ID
+  Baud_Rate                      addr=6   =     0  (0x0000)  Baud rate index (0=1M)
+  Return_Delay_Time              addr=7   =     0  (0x0000)  Response delay (x2 us)
+  Response_Status_Level          addr=8   =     1  (0x0001)  Status return level
+  Min_Position_Limit             addr=9   =     0  (0x0000)  Min position limit
+  Max_Position_Limit             addr=11  =  4095  (0x0fff)  Max position limit
+  Max_Temperature_Limit          addr=13  =    70  (0x0046)  Max temp limit (C)
+  Max_Voltage_Limit              addr=14  =    80  (0x0050)  Max voltage limit (x0.1V)
+  Min_Voltage_Limit              addr=15  =    40  (0x0028)  Min voltage limit (x0.1V)
+  Max_Torque_Limit               addr=16  =  1000  (0x03e8)  Max torque (0-1000 = 0-100%)
+  Phase                          addr=18  =    12  (0x000c)  Phase
+  Unloading_Condition            addr=19  =    44  (0x002c)  Unloading condition
+  LED_Alarm_Condition            addr=20  =    47  (0x002f)  LED alarm condition
+  P_Coefficient                  addr=21  =    24  (0x0018)  PID P gain
+  D_Coefficient                  addr=22  =    48  (0x0030)  PID D gain
+  I_Coefficient                  addr=23  =     0  (0x0000)  PID I gain
+  Minimum_Startup_Force          addr=24  =    16  (0x0010)  Min startup force
+  CW_Dead_Zone                   addr=26  =     1  (0x0001)  CW dead zone
+  CCW_Dead_Zone                  addr=27  =     1  (0x0001)  CCW dead zone
+  Protection_Current             addr=28  =   500  (0x01f4)  Protection current (mA)
+  Angular_Resolution             addr=30  =     1  (0x0001)  Angular resolution
+  Homing_Offset                  addr=31  raw=0x0445 ( 1093)  decoded=1093
+  Operating_Mode                 addr=33  =     0  (0x0000)  Mode (0=pos, 1=speed, 3=step)
+  Protective_Torque              addr=34  =    20  (0x0014)  Protective torque (%)
+  Protection_Time                addr=35  =   200  (0x00c8)  Protection time
+  Overload_Torque                addr=36  =    95  (0x005f)  Overload torque (%)
+  Vel_P_Coeff                    addr=37  =    10  (0x000a)  Velocity P coefficient
+  Over_Current_Prot_Time         addr=38  =   200  (0x00c8)  Over-current protection time
+  Vel_I_Coeff                    addr=39  =   200  (0x00c8)  Velocity I coefficient
+
+  --- SRAM ---
+  Torque_Enable                  addr=40  =     0  (0x0000)  Torque enabled
+  Acceleration                   addr=41  =   254  (0x00fe)  Acceleration
+  Goal_Position                  addr=42  raw=0x07fd ( 2045)  decoded=2045
+  Goal_Time                      addr=44  =     0  (0x0000)  Goal time (ms)
+  Goal_Velocity                  addr=46  raw=0x0000 (    0)  decoded=0
+  Torque_Limit                   addr=48  =   900  (0x0384)  Runtime torque limit (0-1000)
+  Lock                           addr=55  =     1  (0x0001)  EPROM lock (1=locked)
+  Present_Position               addr=56  raw=0x0801 ( 2049)  decoded=2049
+  Present_Velocity               addr=58  raw=0x0000 (    0)  decoded=0
+  Present_Load                   addr=60  raw=0x0000 (    0)  decoded=0
+  Present_Voltage                addr=62  =    53  (0x0035)  Voltage (x0.1V)
+  Present_Temperature            addr=63  =    24  (0x0018)  Temperature (C)
+  Status                         addr=65  =     0  (0x0000)  Status flags
+  Moving                         addr=66  =     0  (0x0000)  Is moving
+  Present_Current                addr=69  =     0  (0x0000)  Current (mA)
+
+  --- FACTORY ---
+  Moving_Velocity_Threshold      addr=80  =     1  (0x0001)  Moving velocity threshold
+  DTs                            addr=81  =    20  (0x0014)  DTs (ms)
+  Velocity_Unit_Factor           addr=82  =    50  (0x0032)  Velocity unit factor
+  Hts                            addr=83  =     1  (0x0001)  Hts (ns)
+  Max_Velocity_Limit             addr=84  =    68  (0x0044)  Max velocity limit
+  Maximum_Acceleration           addr=85  =   254  (0x00fe)  Max acceleration
+  Acceleration_Multiplier        addr=86  =     0  (0x0000)  Accel multiplier (when accel=0)
+
+======================================================================
+  Motor 2: shoulder_pitch
+======================================================================
+
+  --- EPROM ---
+  Firmware_Major                 addr=0   =     3  (0x0003)  Firmware major version
+  Firmware_Minor                 addr=1   =    10  (0x000a)  Firmware minor version
+  Model_Number                   addr=3   =   777  (0x0309)  Model number (777=STS3215)
+  ID                             addr=5   =     2  (0x0002)  Motor ID
+  Baud_Rate                      addr=6   =     0  (0x0000)  Baud rate index (0=1M)
+  Return_Delay_Time              addr=7   =     0  (0x0000)  Response delay (x2 us)
+  Response_Status_Level          addr=8   =     1  (0x0001)  Status return level
+  Min_Position_Limit             addr=9   =     0  (0x0000)  Min position limit
+  Max_Position_Limit             addr=11  =  4095  (0x0fff)  Max position limit
+  Max_Temperature_Limit          addr=13  =    70  (0x0046)  Max temp limit (C)
+  Max_Voltage_Limit              addr=14  =    80  (0x0050)  Max voltage limit (x0.1V)
+  Min_Voltage_Limit              addr=15  =    40  (0x0028)  Min voltage limit (x0.1V)
+  Max_Torque_Limit               addr=16  =  1000  (0x03e8)  Max torque (0-1000 = 0-100%)
+  Phase                          addr=18  =    12  (0x000c)  Phase
+  Unloading_Condition            addr=19  =    44  (0x002c)  Unloading condition
+  LED_Alarm_Condition            addr=20  =    47  (0x002f)  LED alarm condition
+  P_Coefficient                  addr=21  =    32  (0x0020)  PID P gain
+  D_Coefficient                  addr=22  =    16  (0x0010)  PID D gain
+  I_Coefficient                  addr=23  =     0  (0x0000)  PID I gain
+  Minimum_Startup_Force          addr=24  =    16  (0x0010)  Min startup force
+  CW_Dead_Zone                   addr=26  =     1  (0x0001)  CW dead zone
+  CCW_Dead_Zone                  addr=27  =     1  (0x0001)  CCW dead zone
+  Protection_Current             addr=28  =   500  (0x01f4)  Protection current (mA)
+  Angular_Resolution             addr=30  =     1  (0x0001)  Angular resolution
+  Homing_Offset                  addr=31  raw=0x002b (   43)  decoded=43
+  Operating_Mode                 addr=33  =     0  (0x0000)  Mode (0=pos, 1=speed, 3=step)
+  Protective_Torque              addr=34  =    20  (0x0014)  Protective torque (%)
+  Protection_Time                addr=35  =   200  (0x00c8)  Protection time
+  Overload_Torque                addr=36  =    95  (0x005f)  Overload torque (%)
+  Vel_P_Coeff                    addr=37  =    10  (0x000a)  Velocity P coefficient
+  Over_Current_Prot_Time         addr=38  =   200  (0x00c8)  Over-current protection time
+  Vel_I_Coeff                    addr=39  =   200  (0x00c8)  Velocity I coefficient
+
+  --- SRAM ---
+  Torque_Enable                  addr=40  =     0  (0x0000)  Torque enabled
+  Acceleration                   addr=41  =   254  (0x00fe)  Acceleration
+  Goal_Position                  addr=42  raw=0x07fa ( 2042)  decoded=2042
+  Goal_Time                      addr=44  =     0  (0x0000)  Goal time (ms)
+  Goal_Velocity                  addr=46  raw=0x0000 (    0)  decoded=0
+  Torque_Limit                   addr=48  =   900  (0x0384)  Runtime torque limit (0-1000)
+  Lock                           addr=55  =     1  (0x0001)  EPROM lock (1=locked)
+  Present_Position               addr=56  raw=0x0843 ( 2115)  decoded=2115
+  Present_Velocity               addr=58  raw=0x0000 (    0)  decoded=0
+  Present_Load                   addr=60  raw=0x0000 (    0)  decoded=0
+  Present_Voltage                addr=62  =    53  (0x0035)  Voltage (x0.1V)
+  Present_Temperature            addr=63  =    26  (0x001a)  Temperature (C)
+  Status                         addr=65  =     0  (0x0000)  Status flags
+  Moving                         addr=66  =     0  (0x0000)  Is moving
+  Present_Current                addr=69  =     0  (0x0000)  Current (mA)
+
+  --- FACTORY ---
+  Moving_Velocity_Threshold      addr=80  =     1  (0x0001)  Moving velocity threshold
+  DTs                            addr=81  =    20  (0x0014)  DTs (ms)
+  Velocity_Unit_Factor           addr=82  =    50  (0x0032)  Velocity unit factor
+  Hts                            addr=83  =     1  (0x0001)  Hts (ns)
+  Max_Velocity_Limit             addr=84  =    68  (0x0044)  Max velocity limit
+  Maximum_Acceleration           addr=85  =   254  (0x00fe)  Max acceleration
+  Acceleration_Multiplier        addr=86  =     0  (0x0000)  Accel multiplier (when accel=0)
+
+======================================================================
+  Motor 3: elbow_pitch
+======================================================================
+
+  --- EPROM ---
+  Firmware_Major                 addr=0   =     3  (0x0003)  Firmware major version
+  Firmware_Minor                 addr=1   =    10  (0x000a)  Firmware minor version
+  Model_Number                   addr=3   =   777  (0x0309)  Model number (777=STS3215)
+  ID                             addr=5   =     3  (0x0003)  Motor ID
+  Baud_Rate                      addr=6   =     0  (0x0000)  Baud rate index (0=1M)
+  Return_Delay_Time              addr=7   =     0  (0x0000)  Response delay (x2 us)
+  Response_Status_Level          addr=8   =     1  (0x0001)  Status return level
+  Min_Position_Limit             addr=9   =     0  (0x0000)  Min position limit
+  Max_Position_Limit             addr=11  =  4095  (0x0fff)  Max position limit
+  Max_Temperature_Limit          addr=13  =    70  (0x0046)  Max temp limit (C)
+  Max_Voltage_Limit              addr=14  =    80  (0x0050)  Max voltage limit (x0.1V)
+  Min_Voltage_Limit              addr=15  =    40  (0x0028)  Min voltage limit (x0.1V)
+  Max_Torque_Limit               addr=16  =  1000  (0x03e8)  Max torque (0-1000 = 0-100%)
+  Phase                          addr=18  =    12  (0x000c)  Phase
+  Unloading_Condition            addr=19  =    44  (0x002c)  Unloading condition
+  LED_Alarm_Condition            addr=20  =    47  (0x002f)  LED alarm condition
+  P_Coefficient                  addr=21  =    64  (0x0040)  PID P gain
+  D_Coefficient                  addr=22  =    32  (0x0020)  PID D gain
+  I_Coefficient                  addr=23  =     0  (0x0000)  PID I gain
+  Minimum_Startup_Force          addr=24  =    16  (0x0010)  Min startup force
+  CW_Dead_Zone                   addr=26  =     1  (0x0001)  CW dead zone
+  CCW_Dead_Zone                  addr=27  =     1  (0x0001)  CCW dead zone
+  Protection_Current             addr=28  =   500  (0x01f4)  Protection current (mA)
+  Angular_Resolution             addr=30  =     1  (0x0001)  Angular resolution
+  Homing_Offset                  addr=31  raw=0x0bd7 ( 3031)  decoded=-983
+  Operating_Mode                 addr=33  =     0  (0x0000)  Mode (0=pos, 1=speed, 3=step)
+  Protective_Torque              addr=34  =    20  (0x0014)  Protective torque (%)
+  Protection_Time                addr=35  =   200  (0x00c8)  Protection time
+  Overload_Torque                addr=36  =    95  (0x005f)  Overload torque (%)
+  Vel_P_Coeff                    addr=37  =    10  (0x000a)  Velocity P coefficient
+  Over_Current_Prot_Time         addr=38  =   200  (0x00c8)  Over-current protection time
+  Vel_I_Coeff                    addr=39  =   200  (0x00c8)  Velocity I coefficient
+
+  --- SRAM ---
+  Torque_Enable                  addr=40  =     0  (0x0000)  Torque enabled
+  Acceleration                   addr=41  =   254  (0x00fe)  Acceleration
+  Goal_Position                  addr=42  raw=0x07fc ( 2044)  decoded=2044
+  Goal_Time                      addr=44  =     0  (0x0000)  Goal time (ms)
+  Goal_Velocity                  addr=46  raw=0x0000 (    0)  decoded=0
+  Torque_Limit                   addr=48  =   900  (0x0384)  Runtime torque limit (0-1000)
+  Lock                           addr=55  =     1  (0x0001)  EPROM lock (1=locked)
+  Present_Position               addr=56  raw=0x07f3 ( 2035)  decoded=2035
+  Present_Velocity               addr=58  raw=0x0000 (    0)  decoded=0
+  Present_Load                   addr=60  raw=0x0000 (    0)  decoded=0
+  Present_Voltage                addr=62  =    53  (0x0035)  Voltage (x0.1V)
+  Present_Temperature            addr=63  =    24  (0x0018)  Temperature (C)
+  Status                         addr=65  =     0  (0x0000)  Status flags
+  Moving                         addr=66  =     0  (0x0000)  Is moving
+  Present_Current                addr=69  =     0  (0x0000)  Current (mA)
+
+  --- FACTORY ---
+  Moving_Velocity_Threshold      addr=80  =     1  (0x0001)  Moving velocity threshold
+  DTs                            addr=81  =    20  (0x0014)  DTs (ms)
+  Velocity_Unit_Factor           addr=82  =    50  (0x0032)  Velocity unit factor
+  Hts                            addr=83  =     1  (0x0001)  Hts (ns)
+  Max_Velocity_Limit             addr=84  =    68  (0x0044)  Max velocity limit
+  Maximum_Acceleration           addr=85  =   254  (0x00fe)  Max acceleration
+  Acceleration_Multiplier        addr=86  =     0  (0x0000)  Accel multiplier (when accel=0)
+
+======================================================================
+  Motor 4: wrist_pitch
+======================================================================
+
+  --- EPROM ---
+  Firmware_Major                 addr=0   =     3  (0x0003)  Firmware major version
+  Firmware_Minor                 addr=1   =    10  (0x000a)  Firmware minor version
+  Model_Number                   addr=3   =   777  (0x0309)  Model number (777=STS3215)
+  ID                             addr=5   =     4  (0x0004)  Motor ID
+  Baud_Rate                      addr=6   =     0  (0x0000)  Baud rate index (0=1M)
+  Return_Delay_Time              addr=7   =     0  (0x0000)  Response delay (x2 us)
+  Response_Status_Level          addr=8   =     1  (0x0001)  Status return level
+  Min_Position_Limit             addr=9   =     0  (0x0000)  Min position limit
+  Max_Position_Limit             addr=11  =  4095  (0x0fff)  Max position limit
+  Max_Temperature_Limit          addr=13  =    80  (0x0050)  Max temp limit (C)
+  Max_Voltage_Limit              addr=14  =   120  (0x0078)  Max voltage limit (x0.1V)
+  Min_Voltage_Limit              addr=15  =    40  (0x0028)  Min voltage limit (x0.1V)
+  Max_Torque_Limit               addr=16  =  1000  (0x03e8)  Max torque (0-1000 = 0-100%)
+  Phase                          addr=18  =    92  (0x005c)  Phase
+  Unloading_Condition            addr=19  =    44  (0x002c)  Unloading condition
+  LED_Alarm_Condition            addr=20  =    47  (0x002f)  LED alarm condition
+  P_Coefficient                  addr=21  =    48  (0x0030)  PID P gain
+  D_Coefficient                  addr=22  =    32  (0x0020)  PID D gain
+  I_Coefficient                  addr=23  =     0  (0x0000)  PID I gain
+  Minimum_Startup_Force          addr=24  =     0  (0x0000)  Min startup force
+  CW_Dead_Zone                   addr=26  =     1  (0x0001)  CW dead zone
+  CCW_Dead_Zone                  addr=27  =     1  (0x0001)  CCW dead zone
+  Protection_Current             addr=28  =   300  (0x012c)  Protection current (mA)
+  Angular_Resolution             addr=30  =     1  (0x0001)  Angular resolution
+  Homing_Offset                  addr=31  raw=0x0faf ( 4015)  decoded=-1967
+  Operating_Mode                 addr=33  =     0  (0x0000)  Mode (0=pos, 1=speed, 3=step)
+  Protective_Torque              addr=34  =    20  (0x0014)  Protective torque (%)
+  Protection_Time                addr=35  =   200  (0x00c8)  Protection time
+  Overload_Torque                addr=36  =    95  (0x005f)  Overload torque (%)
+  Vel_P_Coeff                    addr=37  =    10  (0x000a)  Velocity P coefficient
+  Over_Current_Prot_Time         addr=38  =   250  (0x00fa)  Over-current protection time
+  Vel_I_Coeff                    addr=39  =   200  (0x00c8)  Velocity I coefficient
+
+  --- SRAM ---
+  Torque_Enable                  addr=40  =     0  (0x0000)  Torque enabled
+  Acceleration                   addr=41  =   250  (0x00fa)  Acceleration
+  Goal_Position                  addr=42  raw=0x0804 ( 2052)  decoded=2052
+  Goal_Time                      addr=44  =     0  (0x0000)  Goal time (ms)
+  Goal_Velocity                  addr=46  raw=0x0000 (    0)  decoded=0
+  Torque_Limit                   addr=48  =   900  (0x0384)  Runtime torque limit (0-1000)
+  Lock                           addr=55  =     1  (0x0001)  EPROM lock (1=locked)
+  Present_Position               addr=56  raw=0x0805 ( 2053)  decoded=2053
+  Present_Velocity               addr=58  raw=0x0000 (    0)  decoded=0
+  Present_Load                   addr=60  raw=0x0000 (    0)  decoded=0
+  Present_Voltage                addr=62  =    53  (0x0035)  Voltage (x0.1V)
+  Present_Temperature            addr=63  =    25  (0x0019)  Temperature (C)
+  Status                         addr=65  =     0  (0x0000)  Status flags
+  Moving                         addr=66  =     0  (0x0000)  Is moving
+  Present_Current                addr=69  =     0  (0x0000)  Current (mA)
+
+  --- FACTORY ---
+  Moving_Velocity_Threshold      addr=80  =     1  (0x0001)  Moving velocity threshold
+  DTs                            addr=81  =    10  (0x000a)  DTs (ms)
+  Velocity_Unit_Factor           addr=82  =    50  (0x0032)  Velocity unit factor
+  Hts                            addr=83  =     1  (0x0001)  Hts (ns)
+  Max_Velocity_Limit             addr=84  =   250  (0x00fa)  Max velocity limit
+  Maximum_Acceleration           addr=85  =   250  (0x00fa)  Max acceleration
+  Acceleration_Multiplier        addr=86  =   100  (0x0064)  Accel multiplier (when accel=0)
+
+======================================================================
+  Motor 5: wrist_yaw
+======================================================================
+
+  --- EPROM ---
+  Firmware_Major                 addr=0   =     3  (0x0003)  Firmware major version
+  Firmware_Minor                 addr=1   =    10  (0x000a)  Firmware minor version
+  Model_Number                   addr=3   =   777  (0x0309)  Model number (777=STS3215)
+  ID                             addr=5   =     5  (0x0005)  Motor ID
+  Baud_Rate                      addr=6   =     0  (0x0000)  Baud rate index (0=1M)
+  Return_Delay_Time              addr=7   =     0  (0x0000)  Response delay (x2 us)
+  Response_Status_Level          addr=8   =     1  (0x0001)  Status return level
+  Min_Position_Limit             addr=9   =     0  (0x0000)  Min position limit
+  Max_Position_Limit             addr=11  =  4095  (0x0fff)  Max position limit
+  Max_Temperature_Limit          addr=13  =    80  (0x0050)  Max temp limit (C)
+  Max_Voltage_Limit              addr=14  =   120  (0x0078)  Max voltage limit (x0.1V)
+  Min_Voltage_Limit              addr=15  =    40  (0x0028)  Min voltage limit (x0.1V)
+  Max_Torque_Limit               addr=16  =  1000  (0x03e8)  Max torque (0-1000 = 0-100%)
+  Phase                          addr=18  =    92  (0x005c)  Phase
+  Unloading_Condition            addr=19  =    44  (0x002c)  Unloading condition
+  LED_Alarm_Condition            addr=20  =    47  (0x002f)  LED alarm condition
+  P_Coefficient                  addr=21  =    32  (0x0020)  PID P gain
+  D_Coefficient                  addr=22  =    32  (0x0020)  PID D gain
+  I_Coefficient                  addr=23  =     0  (0x0000)  PID I gain
+  Minimum_Startup_Force          addr=24  =     0  (0x0000)  Min startup force
+  CW_Dead_Zone                   addr=26  =     1  (0x0001)  CW dead zone
+  CCW_Dead_Zone                  addr=27  =     1  (0x0001)  CCW dead zone
+  Protection_Current             addr=28  =   300  (0x012c)  Protection current (mA)
+  Angular_Resolution             addr=30  =     1  (0x0001)  Angular resolution
+  Homing_Offset                  addr=31  raw=0x0fb9 ( 4025)  decoded=-1977
+  Operating_Mode                 addr=33  =     0  (0x0000)  Mode (0=pos, 1=speed, 3=step)
+  Protective_Torque              addr=34  =    20  (0x0014)  Protective torque (%)
+  Protection_Time                addr=35  =   200  (0x00c8)  Protection time
+  Overload_Torque                addr=36  =    95  (0x005f)  Overload torque (%)
+  Vel_P_Coeff                    addr=37  =    10  (0x000a)  Velocity P coefficient
+  Over_Current_Prot_Time         addr=38  =   250  (0x00fa)  Over-current protection time
+  Vel_I_Coeff                    addr=39  =   200  (0x00c8)  Velocity I coefficient
+
+  --- SRAM ---
+  Torque_Enable                  addr=40  =     0  (0x0000)  Torque enabled
+  Acceleration                   addr=41  =   254  (0x00fe)  Acceleration
+  Goal_Position                  addr=42  raw=0x080a ( 2058)  decoded=2058
+  Goal_Time                      addr=44  =     0  (0x0000)  Goal time (ms)
+  Goal_Velocity                  addr=46  raw=0x0000 (    0)  decoded=0
+  Torque_Limit                   addr=48  =   900  (0x0384)  Runtime torque limit (0-1000)
+  Lock                           addr=55  =     1  (0x0001)  EPROM lock (1=locked)
+  Present_Position               addr=56  raw=0x0808 ( 2056)  decoded=2056
+  Present_Velocity               addr=58  raw=0x0000 (    0)  decoded=0
+  Present_Load                   addr=60  raw=0x0000 (    0)  decoded=0
+  Present_Voltage                addr=62  =    52  (0x0034)  Voltage (x0.1V)
+  Present_Temperature            addr=63  =    25  (0x0019)  Temperature (C)
+  Status                         addr=65  =     0  (0x0000)  Status flags
+  Moving                         addr=66  =     0  (0x0000)  Is moving
+  Present_Current                addr=69  =     0  (0x0000)  Current (mA)
+
+  --- FACTORY ---
+  Moving_Velocity_Threshold      addr=80  =     1  (0x0001)  Moving velocity threshold
+  DTs                            addr=81  =    10  (0x000a)  DTs (ms)
+  Velocity_Unit_Factor           addr=82  =    50  (0x0032)  Velocity unit factor
+  Hts                            addr=83  =     1  (0x0001)  Hts (ns)
+  Max_Velocity_Limit             addr=84  =   250  (0x00fa)  Max velocity limit
+  Maximum_Acceleration           addr=85  =   250  (0x00fa)  Max acceleration
+  Acceleration_Multiplier        addr=86  =   100  (0x0064)  Accel multiplier (when accel=0)
+
+======================================================================
+  Motor 6: camera_roll
+======================================================================
+
+  --- EPROM ---
+  Firmware_Major                 addr=0   =     3  (0x0003)  Firmware major version
+  Firmware_Minor                 addr=1   =    10  (0x000a)  Firmware minor version
+  Model_Number                   addr=3   =   777  (0x0309)  Model number (777=STS3215)
+  ID                             addr=5   =     6  (0x0006)  Motor ID
+  Baud_Rate                      addr=6   =     0  (0x0000)  Baud rate index (0=1M)
+  Return_Delay_Time              addr=7   =     0  (0x0000)  Response delay (x2 us)
+  Response_Status_Level          addr=8   =     1  (0x0001)  Status return level
+  Min_Position_Limit             addr=9   =     0  (0x0000)  Min position limit
+  Max_Position_Limit             addr=11  =  4095  (0x0fff)  Max position limit
+  Max_Temperature_Limit          addr=13  =    70  (0x0046)  Max temp limit (C)
+  Max_Voltage_Limit              addr=14  =    80  (0x0050)  Max voltage limit (x0.1V)
+  Min_Voltage_Limit              addr=15  =    40  (0x0028)  Min voltage limit (x0.1V)
+  Max_Torque_Limit               addr=16  =   500  (0x01f4)  Max torque (0-1000 = 0-100%)
+  Phase                          addr=18  =    12  (0x000c)  Phase
+  Unloading_Condition            addr=19  =    44  (0x002c)  Unloading condition
+  LED_Alarm_Condition            addr=20  =    47  (0x002f)  LED alarm condition
+  P_Coefficient                  addr=21  =    25  (0x0019)  PID P gain
+  D_Coefficient                  addr=22  =    32  (0x0020)  PID D gain
+  I_Coefficient                  addr=23  =     0  (0x0000)  PID I gain
+  Minimum_Startup_Force          addr=24  =    16  (0x0010)  Min startup force
+  CW_Dead_Zone                   addr=26  =     1  (0x0001)  CW dead zone
+  CCW_Dead_Zone                  addr=27  =     1  (0x0001)  CCW dead zone
+  Protection_Current             addr=28  =   250  (0x00fa)  Protection current (mA)
+  Angular_Resolution             addr=30  =     1  (0x0001)  Angular resolution
+  Homing_Offset                  addr=31  raw=0x0b96 ( 2966)  decoded=-918
+  Operating_Mode                 addr=33  =     0  (0x0000)  Mode (0=pos, 1=speed, 3=step)
+  Protective_Torque              addr=34  =    20  (0x0014)  Protective torque (%)
+  Protection_Time                addr=35  =   200  (0x00c8)  Protection time
+  Overload_Torque                addr=36  =    25  (0x0019)  Overload torque (%)
+  Vel_P_Coeff                    addr=37  =    10  (0x000a)  Velocity P coefficient
+  Over_Current_Prot_Time         addr=38  =   200  (0x00c8)  Over-current protection time
+  Vel_I_Coeff                    addr=39  =   200  (0x00c8)  Velocity I coefficient
+
+  --- SRAM ---
+  Torque_Enable                  addr=40  =     0  (0x0000)  Torque enabled
+  Acceleration                   addr=41  =   254  (0x00fe)  Acceleration
+  Goal_Position                  addr=42  raw=0x07d8 ( 2008)  decoded=2008
+  Goal_Time                      addr=44  =     0  (0x0000)  Goal time (ms)
+  Goal_Velocity                  addr=46  raw=0x0000 (    0)  decoded=0
+  Torque_Limit                   addr=48  =   900  (0x0384)  Runtime torque limit (0-1000)
+  Lock                           addr=55  =     1  (0x0001)  EPROM lock (1=locked)
+  Present_Position               addr=56  raw=0x07da ( 2010)  decoded=2010
+  Present_Velocity               addr=58  raw=0x0000 (    0)  decoded=0
+  Present_Load                   addr=60  raw=0x0000 (    0)  decoded=0
+  Present_Voltage                addr=62  =    53  (0x0035)  Voltage (x0.1V)
+  Present_Temperature            addr=63  =    25  (0x0019)  Temperature (C)
+  Status                         addr=65  =     0  (0x0000)  Status flags
+  Moving                         addr=66  =     0  (0x0000)  Is moving
+  Present_Current                addr=69  =     1  (0x0001)  Current (mA)
+
+  --- FACTORY ---
+  Moving_Velocity_Threshold      addr=80  =     1  (0x0001)  Moving velocity threshold
+  DTs                            addr=81  =    20  (0x0014)  DTs (ms)
+  Velocity_Unit_Factor           addr=82  =    50  (0x0032)  Velocity unit factor
+  Hts                            addr=83  =     1  (0x0001)  Hts (ns)
+  Max_Velocity_Limit             addr=84  =    68  (0x0044)  Max velocity limit
+  Maximum_Acceleration           addr=85  =   254  (0x00fe)  Max acceleration
+  Acceleration_Multiplier        addr=86  =     0  (0x0000)  Accel multiplier (when accel=0)
+
+======================================================================
+  SUMMARY - Key Parameters
+======================================================================
+  Parameter                   M1 base_y   M2 should   M3 elbow_   M4 wrist_   M5 wrist_   M6 camera
+  -------------------------------------------------------------------------------------------------
+  Max_Torque_Limit                 1000        1000        1000        1000        1000         500
+  P_Coefficient                      24          32          64          48          32          25
+  D_Coefficient                      48          16          32          32          32          32
+  I_Coefficient                       0           0           0           0           0           0
+  Protection_Current                500         500         500         300         300         250
+  Protective_Torque                  20          20          20          20          20          20
+  Protection_Time                   200         200         200         200         200         200
+  Overload_Torque                    95          95          95          95          95          25
+  Operating_Mode                      0           0           0           0           0           0
+  Torque_Enable                       0           0           0           0           0           0
+  Acceleration                      254         254         254         250         254         254
+  Torque_Limit                      900         900         900         900         900         900
+  Lock                                1           1           1           1           1           1
+  Present_Load                        0           0           0           0           0           0
+  Present_Voltage                    53          53          53          53          52          53
+  Present_Temperature                24          26          24          25          25          25
+  Present_Current                     0           0           0           0           0           0
+  Max_Acceleration                  254         254         254         250         250         254

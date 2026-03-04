@@ -10,3 +10,7 @@ __pycache__/
 calibration/
 output.txt
 waypoints.json
+
+# Local reference files
+docs/ST3215_manuals/
+urdf/joint_origins.txt
